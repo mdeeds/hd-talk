@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HD Chat</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <link rel="icon" href="mic.jpg">
+  <link rel="icon" href="logo.png">
   <link rel="stylesheet" href="index.css">
-<body>
+  <script src="vu.js"></script>
+  <script src="index.js"></script></head>
+<body onload="init()">
   <h1>HD Jam</h1>
   <h2>Connection</h2>
   <div id="connection-controls">
@@ -33,15 +35,14 @@
 
 <h2>Call</h2>
 <div>
-    <canvas width="100" height="50" id="inputSignal">
-	<canvas width="100" height="50" id="localSignal">
-	<canvas width="100" height="50" id="remoteSignal">
+    <canvas width="51" height="51" id="inputSignal"></canvas>
+	<canvas width="51" height="51" id="dupeSignal"></canvas>
+	<canvas width="51" height="51" id="peerSignal"></canvas>
 	</div>
 	<div>
 	<button type="button" id="call">Call</button>
 	</div>
 
-  <script src="index.js"></script> </head>
 
 </body>
 </html>

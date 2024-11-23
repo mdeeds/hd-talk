@@ -1,17 +1,96 @@
 
 let peer = null;
 let conn = null;
-const peerStatus = document.getElementById('status');
+let peerStatus;
 let otherId = undefined;
+let callButton;
+let seenErrors;
+let messagesDiv;
+let messageInput;
+let sendMessageButton;
+let inputList;
+let outputList;
+let scanButton;
+let selectedInputDevice = null;
+let selectedOutputDevice = null;
+let audioCtx = null;
+let inputAnalyser = null;
+let inputSourceNode = null;
+let peerAnalyser = null;
+let peerSourceNode = null;
 
-// For a peer ID workaround
-let lastPeerId = null;
+function init() {
+	peerStatus = document.getElementById('status');
+	callButton = document.getElementById('call');
+	seenErrors = new Set();
+	messagesDiv = document.getElementById('messages');
+	messageInput = document.getElementById('messageInput');
+	sendMessageButton = document.getElementById('sendMessageButton');
+	inputList = document.getElementById('input-list');
+	outputList = document.getElementById('output-list');
+	scanButton = document.getElementById('scan');
+	initialize(getChannelId());
+	
+	 sendMessageButton.addEventListener('click', () => {
+	  const message = messageInput.value;
+	  if (message) {
+		conn.send(message);
+		addMessageToChat(message, 'You');
+		messageInput.value = '';
+	  }
+	});
+	// Event listeners for scan buttons
+	scanButton.addEventListener('click', () => {
+	  enumerateDevices();
+	});
+
+	// Event listeners for radio button changes
+	inputList.addEventListener('change', (event) => {
+	  selectedInputDevice = event.target.value;
+	  // Update audio input here, using the selected device ID
+	});
+
+	outputList.addEventListener('change', (event) => {
+	  selectedOutputDevice = event.target.value;
+	  // Update audio output here, using the selected device ID
+	});
+
+	callButton.addEventListener('click', () => {
+		const outgoingStream = audioCtx.createMediaStreamDestination();
+		inputSourceNode.connect(outgoingStream);
+		const analyser = audioCtx.createAnalyser();
+		inputSourceNode.connect(analyser);
+		const canvas = document.getElementById('dupeSignal');
+		const vu = new AudioVisualizer(canvas, analyser);
+		vu.start();
+		
+		const call = peer.call(otherId, outgoingStream.stream);
+		call.on('error', (err) => { 
+		  console.log(`Call error: ${err.message}`);
+		});
+		call.on('stream', (incomingStream) => {
+			// Ungodly hack to actually get the audio to flow
+			const a = new Audio();
+			a.muted = true;
+			a.srcObject = incomingStream;
+			a.addEventListener('canplathrough', () => { a = null; });
+			// End ungodly hack.
+
+			console.log('Call stream');
+		  if (!!peerSourceNode) {
+			  peerSourceNode.disconnect();
+		  }
+		  peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+		  peerSourceNode.connect(peerAnalyser);
+		});
+	});
+
+}
 
 function getChannelId() {
   return `HD938541-${document.getElementById('connectionId').value}`;
 }
 
-const seenErrors = new Set();
 
 function addConnHandlers() {
 	conn.on('data', function(data) {
@@ -62,32 +141,37 @@ function initialize(id) {
 			}
 		}
 	});
-	peer.on('call', function(mediaConnection) {
-		console.log('Peer call');
-		
-		navigator.mediaDevices.getUserMedia({
-			audio: {
-				 deviceId: selectedInputDevice,
-				  echoCancellation: false,
-				  noiseSuppression: false,
-				  autoGainControl: false,
-    			  latencyHint: 'low'
+	peer.on('call', function(call) {
+		console.log('Peer call (call recieved)');
+		const outgoingStream = audioCtx.createMediaStreamDestination();
+		inputSourceNode.connect(outgoingStream);
+		const analyser = audioCtx.createAnalyser();
+		inputSourceNode.connect(analyser);
+		const canvas = document.getElementById('dupeSignal');
+		const vu = new AudioVisualizer(canvas, analyser);
+		vu.start();
+		call.answer(outgoingStream.stream);
+		call.on('stream', function(incomingStream) {
+			// Ungodly hack to actually get the audio to flow
+			const a = new Audio();
+			a.muted = true;
+			a.srcObject = incomingStream;
+			a.addEventListener('canplathrough', () => { a = null; });
+			// End ungodly hack.
+			console.log('Stream Recieved');
+			if (!!peerSourceNode) {
+				peerSourceNode.disconnect();
 			}
-		})
-		.then(stream => { 
-		    console.log('Answering');
-  		    mediaConnection.answer(stream);
-			mediaConnection.on('stream', function(remoteStream) {
-				console.log('Media connection stream');
-  			    const sourceNode = audioCtx.createMediaStreamSource(
-				  remoteStream);
-			    sourceNode.connect(audioCtx.destination);
-			});
+			incomingStream.addEventListener('active', () => { console.log('incomingStream active'); });
+			incomingStream.addEventListener('addtrack', () => { console.log('incomingStream addtrack'); });
+			incomingStream.addEventListener('inactive', () => { console.log('incomingStream inactive'); });
+			incomingStream.addEventListener('removetrack', () => { console.log('incomingStream removetrack'); });
+			peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+			peerSourceNode.connect(peerAnalyser);
 		});
+		
 	});
 }
-
-initialize(getChannelId());
 
 function join() {
 	console.log('join');
@@ -100,13 +184,6 @@ function join() {
 	});
 	addConnHandlers();
 }
-
-
-const messagesDiv = document.getElementById('messages');
-const messageInput = document.getElementById('messageInput');
-const sendMessageButton   
- = document.getElementById('sendMessageButton');
- 
  
 function addMessageToChat(message, sender) {
   const messageElement = document.createElement('div');
@@ -116,24 +193,37 @@ function addMessageToChat(message, sender) {
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
  
- sendMessageButton.addEventListener('click', () => {
-  const message = messageInput.value;
-  if (message) {
-    conn.send(message);
-    addMessageToChat(message, 'You');
-    messageInput.value = '';
-  }
-});
 
+async function setInput(id) {
+  selectedInputDevice = id;
+      const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: id,
+		  echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          latencyHint: 'low'
+      }
+    });
 
-const inputList = document.getElementById('input-list');
-const outputList = document.getElementById('output-list');
-const scanButton = document.getElementById('scan');
-
-let selectedInputDevice = null;
-let selectedOutputDevice = null;
-
-let audioCtx = null;
+	if (!inputAnalyser) {
+		inputAnalyser = audioCtx.createAnalyser();
+		const vuCanvas = document.getElementById('inputSignal');
+		const vu = new AudioVisualizer(vuCanvas, inputAnalyser);
+		vu.start();
+	}
+	if (!peerAnalyser) {
+		peerAnalyser = audioCtx.createAnalyser();
+		const vuCanvas = document.getElementById('peerSignal');
+		const vu = new AudioVisualizer(vuCanvas, peerAnalyser);
+		vu.start();
+	}
+	if (!!inputSourceNode) {
+		inputSourceNode.disconnect();
+	}
+    inputSourceNode = audioCtx.createMediaStreamSource(stream);
+    inputSourceNode.connect(inputAnalyser);
+}
 
 // Function to enumerate audio devices
 function enumerateDevices() {
@@ -178,7 +268,7 @@ function enumerateDevices() {
         // Set the first input device as selected by default
         if (!selectedInputDevice) {
           radio.checked = true;
-          selectedInputDevice = device.deviceId;
+		  setInput(device.deviceId);
         }
       });
 
@@ -215,100 +305,3 @@ function enumerateDevices() {
     });
 }
 
-// Event listeners for scan buttons
-scanButton.addEventListener('click', () => {
-  enumerateDevices();
-});
-
-// Event listeners for radio button changes
-inputList.addEventListener('change', (event) => {
-  selectedInputDevice = event.target.value;
-  // Update audio input here, using the selected device ID
-});
-
-outputList.addEventListener('change', (event) => {
-  selectedOutputDevice = event.target.value;
-  // Update audio output here, using the selected device ID
-});
-
-// Initial device scan
-enumerateDevices();
-
-const callButton = document.getElementById('call');
-
-callButton.addEventListener('click', () => {
-  navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: selectedInputDevice,
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      latencyHint: 'low'
-    }
-  })
-  .then(stream => {
-	const call = peer.call(otherId, stream);
-	call.on('error', (err) => { 
-	  console.log(`Call error: ${err.message}`);
-	});
-	call.on('stream', (incomingStream) => {
-		console.log('Call stream');
-      // Connect the remote stream to the destination node
-      const sourceNode = audioCtx.createMediaStreamSource(incomingStream);
-      sourceNode.connect(audioCtx.destination);
-	});
-  });
-});
-
-let animationId = null;
-
-function displayFFT(deviceId, canvas) {
-	cancelAnimationFrame(animationId);
-  navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: deviceId
-    }
-  })
-  .then(stream => {
-    const audioContext = new AudioContext();
-    const sourceNode = audioContext.createMediaStreamSource(stream);
-    const analyserNode = audioContext.createAnalyser();   
-
-
-    sourceNode.connect(analyserNode);
-
-    const bufferLength = analyserNode.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const   
- draw = () => {
-      animationId = requestAnimationFrame(draw);
-      analyserNode.getByteTimeDomainData(dataArray);
-
-      const width = canvas.width;
-      const height = canvas.height;
-      const context = canvas.getContext('2d');
-
-      context.fillStyle = 'rgb(200, 200, 200)';
-      context.fillRect(0, 0, width, height);
-
-      context.lineWidth = 2;
-      context.strokeStyle = 'rgb(0, 0, 255)';
-
-      context.beginPath();
-      context.moveTo(0, height / 2);
-      for (let i = 0; i < bufferLength; i++) {
-        const value = dataArray[i];
-        const x = map(i, 0, bufferLength - 1, 0, width);
-        const y = map(value, 0, 255, height, 0);
-        context.lineTo(x, y);
-      }
-      context.stroke();
-    };
-
-    draw();
-  })
-  .catch(err => {
-    console.error('Error accessing microphone:', err);
-  });
-}
