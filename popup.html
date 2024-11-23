@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Edit Lyrics</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div id="lyricsContainer">
+    <div id="lyrics" contenteditable=true></div>
+    <button id="submit">Submit</button>
+  </div>
+    <script>
+      document.getElementById('submit').addEventListener('click', () => {
+	  console.log('submit lyrics');
+        const message = {
+			command: 'updateLyrics',
+			text: document.getElementById('lyrics').innerText,
+		};
+        window.opener.postMessage(message, '*');
+        window.close();
+      });
+    </script>
+</body>
+</html>

@@ -43,3 +43,25 @@ button {
 canvas {
 	border: solid 1px black;
 }
+
+#lyricsContainer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+	box-sizing: border-box;
+}
+
+#lyrics {
+    flex-grow: 1;
+	/* overflow-y: scroll; */
+    width: 100%;
+    border: solid black 1px;
+	box-sizing: border-box;
+}
+
+#workArea {
+	border: solid black 1px;
+	width: 100%;
+	height: 100vh;
+	box-sizing: border-box;
+}

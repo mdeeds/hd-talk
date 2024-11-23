@@ -73,9 +73,8 @@ function init() {
 			const a = new Audio();
 			a.muted = true;
 			a.srcObject = incomingStream;
-			a.addEventListener('canplathrough', () => { a = null; });
+			a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
 			// End ungodly hack.
-
 			console.log('Call stream');
 		  if (!!peerSourceNode) {
 			  peerSourceNode.disconnect();
@@ -85,6 +84,23 @@ function init() {
 		});
 	});
 
+	const workArea = document.getElementById('workArea');
+	const magicCanvas = new MagicCanvas(workArea);
+
+	const editButton = document.getElementById('editLyrics');
+	editButton.addEventListener('click', () => {
+		  const popup = window.open('popup.html', 'Popup', 'width=400,height=200');
+	});
+	window.addEventListener('message', (event) => {
+		const data = event.data;
+			switch (data.command) {
+				case 'updateLyrics':
+  				console.log('New Lyrics:\n' + data.text);
+				magicCanvas.replaceText(data.text);
+				break;
+			}
+		});
+	
 }
 
 function getChannelId() {
@@ -156,7 +172,7 @@ function initialize(id) {
 			const a = new Audio();
 			a.muted = true;
 			a.srcObject = incomingStream;
-			a.addEventListener('canplathrough', () => { a = null; });
+			a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
 			// End ungodly hack.
 			console.log('Stream Recieved');
 			if (!!peerSourceNode) {
