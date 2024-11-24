@@ -49,19 +49,11 @@ class MagicCanvas {
     });
   }
   
-  _addListener() {
-	this.canvas.addEventListener('wheel', (event) => {
-		event.preventDefault();
-		const delta = event.deltaY;
-		const scaleFactor = 1.2;
-
-		// Get the mouse position relative to the canvas
-		const rect = this.canvas.getBoundingClientRect();
-		const mouseX = event.clientX - rect.left;
-		const mouseY = event.clientY - rect.top;   
+  _zoomToPoint(clientX, clientY, zoom) {
+ 		const rect = this.canvas.getBoundingClientRect();
+		const mouseX = clientX - rect.left;
+		const mouseY = clientY - rect.top;   
 		
-		const zoom = (delta > 0) ? 1 / scaleFactor : scaleFactor;
-
 		// Convert mouse coordinates to canvas coordinates
 		const inverseMatrix = this.ctx.getTransform().inverse();
 		const canvasX = inverseMatrix.a * mouseX + inverseMatrix.c * mouseY + inverseMatrix.e;
@@ -77,6 +69,49 @@ class MagicCanvas {
 		this.scale = newMatrix.a;
 		this.xOffset = newMatrix.e;
 		this.yOffset = newMatrix.f;
+  }
+  
+  _addListener() {
+	  let previousDistance = null;
+	  
+	  
+	this.canvas.addEventListener('wheel', (event) => {
+		event.preventDefault();
+		const delta = event.deltaY;
+		const scaleFactor = 1.2;
+		const zoom = (delta > 0) ? 1 / scaleFactor : scaleFactor;
+		
+		this._zoomToPoint(event.clientX, event.clientY, zoom);
+	});
+	
+	this.canvas.addEventListener('touchstart', (event) => {
+	  // Handle the start of a touch event
+	  const touch1 = event.touches[0];
+	  const touch2 = event.touches[1];
+
+	  if (touch1 && touch2) {
+		// Store the initial distance between the touch points
+		previousDistance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+	  }
+	});
+
+	this.canvas.addEventListener('touchmove', (event) => {
+	  const touch1 = event.touches[0];
+	  const touch2 = event.touches[1];
+
+	  if (touch1 && touch2) {
+		event.preventDefault(); // Prevent default scrolling behavior
+		const currentDistance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+		const zoom = currentDistance / previousDistance;
+		previousDistance = currentDistance;
+
+		// Calculate the midpoint between the two touch points
+		const midpointX = (touch1.clientX + touch2.clientX) / 2;
+		const midpointY = (touch1.clientY + touch2.clientY) / 2;
+
+		// Call your zoomToPoint function with the midpoint and zoom amount
+		this.zoomToPoint(midpointX, midpointY, zoom);
+	  }
 	});
   }
 
