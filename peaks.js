@@ -1,10 +1,50 @@
+
+class InfiniteArray {
+  constructor() {
+    this.buffers = [];
+    this.maxValues = [];
+    this.index = 0;
+	this.bufferCount = 0;
+	this.length = 0;
+  }
+
+  append(value) {
+	  ++this.length;
+    const currentBuffer = this.buffers[this.buffers.length - 1];
+
+    if (!currentBuffer || this.index >= 4096) {
+		// Purge before we add a new buffer so we don't purge the new one.
+		if (this.bufferCount > 1024) {
+		  this.purgeOldBuffers();
+		}
+		this.buffers.push(new Float32Array(4096));
+		++this.bufferCount;
+		this.maxValues.push(0);
+		this.index = 0;
+    }
+	const bufferIndex = this.buffers.length - 1;
+    this.buffers[bufferIndex][this.index] = value;
+    this.maxValues[bufferIndex] = Math.max(this.maxValues[bufferIndex], Math.abs(value));
+    this.index++;
+  }
+
+	purgeOldBuffers() {
+		const indices = Array.from({ length: this.buffers.length }, (_, i) => i);
+		indices.sort((a, b) => this.maxValues[b] - this.maxValues[a]); // Sort in descending order
+		// Purge 32 of the buffers.
+		for (let i = 0; i < 32; i++) {
+		  this.buffers[indices[i]] = null;
+		  this.maxValues[indices[i]] = 0;
+		}
+	}
+}
+
+
 class DataAccumulator {
   constructor() {
 	// Accumulated data at 1/8 resolution
-	this.minArray = new Float32Array(1024);
-    this.maxArray = new Float32Array(1024);
-	// Number of elements that have been used in the arrays above.
-	this.length = 0;
+	this.minArray = new InfiniteArray();
+    this.maxArray = new InfiniteArray();
 	// If append is called with something that is not divisible by 8, the remainder
 	// is saved here for next time.
 	this.leftoverMin = new Float32Array(7);
@@ -28,14 +68,10 @@ class DataAccumulator {
 			if (!this.subAccumulator) {
 				this.subAccumulator = new DataAccumulator();
 			}
-			if (this.length >= this.minArray.length) {
-				this.minArray = this.resizeArray(this.minArray);
-				this.maxArray = this.resizeArray(this.maxArray);
-			}
 			const newMinX = Math.min(this.currentMin, minX);
 			const newMaxX = Math.max(this.currentMax, maxX);
-		    this.minArray[this.length] = newMinX;
-		    this.maxArray[this.length] = newMaxX;
+		    this.minArray.append(newMinX);
+		    this.maxArray.append(newMaxX);
 			this.subAccumulator._appendMinMax(newMinX, newMaxX);
 			++this.length;
             this.leftovers = 0;
@@ -54,15 +90,23 @@ class DataAccumulator {
 	  }
   }
 
-  getView(start, count) {
-    return {
-      minArray: this.minArray.slice(start, start + count),
-      maxArray: this.maxArray.slice(start, start + count)
-    };
-  }
 	resizeArray(array) {
 		const newArray = new Float32Array(2 * array.length);
 		newArray.set(array);
 		return newArray;
+	}
+}
+
+class SamplesAndPeaks {
+	constructor() {
+		this.samples = new InfiniteArray();
+		this.peaks = new DataAccumulator();
+	}
+	
+	appendArray(array) {
+		this.peaks.appendArray(array);
+		for (const x of array) {
+			this.samples.append(x);
+		}
 	}
 }

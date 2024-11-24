@@ -102,7 +102,7 @@ function init() {
 			}
 		});
 		
-	localPeaks = new DataAccumulator();
+	localPeaks = new SamplesAndPeaks();
 }
 
 function getChannelId() {
