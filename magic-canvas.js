@@ -13,12 +13,12 @@ class TextRect {
 class MagicCanvas {
   constructor(canvas) {
 	this.canvas = canvas;
-    this.canvas.width = canvas.clientWidth;
-    this.canvas.height = canvas.clientHeight;
+	this._resize();
+
+	window.addEventListener('resize', this._resize.bind(this));
     this.rects = [];
     this.rects.push(new TextRect('Hello, World!', 100, 100));
-    this.ctx = canvas.getContext('2d');
-	this.ctx.font = "50px serif";
+
 
     this.xOffset = 0;
     this.yOffset = 0;
@@ -28,6 +28,13 @@ class MagicCanvas {
 	
 	this.draw();
   }
+  
+	_resize() {
+		this.canvas.width = this.canvas.clientWidth;
+		this.canvas.height = this.canvas.clientHeight;
+		this.ctx = this.canvas.getContext('2d');
+		this.ctx.font = "50px serif";
+	}
   
   replaceText(text) {
 	  this.rects = [];
