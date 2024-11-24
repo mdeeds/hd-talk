@@ -18,6 +18,7 @@ let inputAnalyser = null;
 let inputSourceNode = null;
 let peerAnalyser = null;
 let peerSourceNode = null;
+let localPeaks = null;
 
 function init() {
 	peerStatus = document.getElementById('status');
@@ -100,7 +101,8 @@ function init() {
 				break;
 			}
 		});
-	
+		
+	localPeaks = new DataAccumulator();
 }
 
 function getChannelId() {
@@ -239,6 +241,13 @@ async function setInput(id) {
 	}
     inputSourceNode = audioCtx.createMediaStreamSource(stream);
     inputSourceNode.connect(inputAnalyser);
+	
+	await audioCtx.audioWorklet.addModule('worklet-recorder.js');
+	const worklet = new AudioWorkletNode(audioCtx, 'worklet-recorder');
+	inputSourceNode.connect(worklet);
+	worklet.port.onmessage = (event) => { 
+		localPeaks.appendArray(event.data.samples);
+	};
 }
 
 // Function to enumerate audio devices

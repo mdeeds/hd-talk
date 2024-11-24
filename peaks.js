@@ -7,51 +7,51 @@ class DataAccumulator {
 	this.length = 0;
 	// If append is called with something that is not divisible by 8, the remainder
 	// is saved here for next time.
-	this.leftoverData = new Float32Array(7);
+	this.leftoverMin = new Float32Array(7);
+	this.leftoverMax = new Float32Array(7);
 	this.leftovers = 0;
 	this.currentMin = Infinity;
 	this.currentMax = -Infinity;
+	this.subAccumulator = null;
   }
   
     _appendOne(x) {
+		this._appendMinMax(x, x);
+    }
+	
+	_appendMinMax(minX, maxX) {
+		// TODO: Handle an infinite buffer.
+		if (this.length > 512 * 1024 * 1024) {
+			return; 
+		}
 	    if (this.leftovers == 7) {
-			// TODO check that minArray is long enough and resize if neccessary.
-			// Probably adding 10% or 1024 entries - whichever is more.
-		    this.minArray[this.length] = Math.min(this.currentMin, x);
-		    this.maxArray[this.length] = Math.max(this.currentMax, x);
+			if (!this.subAccumulator) {
+				this.subAccumulator = new DataAccumulator();
+			}
+			if (this.length >= this.minArray.length) {
+				this.minArray = this.resizeArray(this.minArray);
+				this.maxArray = this.resizeArray(this.maxArray);
+			}
+			const newMinX = Math.min(this.currentMin, minX);
+			const newMaxX = Math.max(this.currentMax, maxX);
+		    this.minArray[this.length] = newMinX;
+		    this.maxArray[this.length] = newMaxX;
+			this.subAccumulator._appendMinMax(newMinX, newMaxX);
+			++this.length;
             this.leftovers = 0;
 		    this.currentMin = Infinity;
 			this.currentMax = -Infinity;		  
 	    } else {
-		  this.leftoverData[this.leftovers] = x;
+		  this.leftoverMin[this.leftovers] = minX;
+		  this.leftoverMax[this.leftovers] = maxX;
 		  ++this.leftovers;
 	    }
-    }
+	}
 
   appendArray(array) {
-    const reducedArray = this.reduceArray(array);
-
-    // Resize the internal arrays
-    const newLength = this.minArray.length + reducedArray.length;
-    this.minArray = this.resizeArray(this.minArray, newLength);
-    this.maxArray = this.resizeArray(this.maxArray, newLength);
-
-    // Copy the reduced data into the internal arrays
-    this.minArray.set(reducedArray.map(item => item.min), this.minArray.length - reducedArray.length);
-    this.maxArray.set(reducedArray.map(item => item.max), this.maxArray.length - reducedArray.length);
-  }
-
-  appendMinMaxArrays(minArray, maxArray) {
-    const reducedArray = this.reduceMinMaxArrays(minArray, maxArray);
-
-    // Resize the internal arrays
-    const newLength = this.minArray.length + reducedArray.length;
-    this.minArray = this.resizeArray(this.minArray, newLength);
-    this.maxArray = this.resizeArray(this.maxArray, newLength);
-
-    // Copy the reduced data into the internal arrays
-    this.minArray.set(reducedArray.map(item => item.min), this.minArray.length - reducedArray.length);
-    this.maxArray.set(reducedArray.map(item => item.max), this.maxArray.length - reducedArray.length);
+	  for (const x of array) {
+		this._appendOne(x);
+	  }
   }
 
   getView(start, count) {
@@ -60,9 +60,9 @@ class DataAccumulator {
       maxArray: this.maxArray.slice(start, start + count)
     };
   }
-  resizeArray(array, newLength) {
-    const newArray = new Float32Array(newLength);
-    newArray.set(array);
-    return newArray;
-  }
+	resizeArray(array) {
+		const newArray = new Float32Array(2 * array.length);
+		newArray.set(array);
+		return newArray;
+	}
 }
