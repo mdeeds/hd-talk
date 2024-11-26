@@ -1,3 +1,45 @@
+const kIABufferSize = 4096;
+
+class InfiniteArrayIterator {
+	constructor(arrayView) {
+		this.arrayView = arrayView;
+		this.currentIndex = arrayView.firstBufferIndex;
+		this.currentOffset = arrayView.firstBufferOffset;
+		this.returnCount = 0;
+	}
+	
+  next() {
+    if (this.returnCount >= this.count) {
+      return { done: true, value: undefined };
+    }
+
+    const buffer = this.arrayView.sourceArray.buffers[this.currentIndex];
+	// If the buffer is null, it means it is a buffer of zeros.
+    const value = !!buffer ? buffer[this.currentOffset] : 0;
+
+    this.currentOffset++;
+    if (this.currentOffset >= kIABufferSize) {
+      this.currentIndex++;
+      this.currentOffset = 0;
+    }
+
+    this.returnCount++;
+    return { done: false, value };
+  }
+}
+
+class InfiniteArrayView {
+	constructor(sourceArray, offset, count) {
+		this.sourceArray = sourceArray;
+		this.firstBufferIndex = Math.floor(offset / kIABufferSize);
+		this.firstBufferOffset = offset % kIABufferSize;
+	}
+	
+	// TODO: Return a new InfiniteArrayIterator
+	*[Symbol.iterator]() {
+		return new InfiniteArrayIterator(this);
+	}
+}
 
 class InfiniteArray {
   constructor() {
@@ -12,12 +54,12 @@ class InfiniteArray {
 	  ++this.length;
     const currentBuffer = this.buffers[this.buffers.length - 1];
 
-    if (!currentBuffer || this.index >= 4096) {
+    if (!currentBuffer || this.index >= kIABufferSize) {
 		// Purge before we add a new buffer so we don't purge the new one.
 		if (this.bufferCount > 1024) {
 		  this.purgeOldBuffers();
 		}
-		this.buffers.push(new Float32Array(4096));
+		this.buffers.push(new Float32Array(kIABufferSize));
 		++this.bufferCount;
 		this.maxValues.push(0);
 		this.index = 0;
