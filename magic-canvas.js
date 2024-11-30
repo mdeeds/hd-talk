@@ -10,9 +10,8 @@ class VisibleBounds {
   }
 }
 
-class TextRect {
-  constructor(text, x, y, width, height) {
-	  this.text = text;
+class Rect {
+  constructor(x, y, width, height) {
 	  this.x = x;
 	  this.y = y;
     this.width = width;
@@ -22,6 +21,42 @@ class TextRect {
     this.dragStartY = undefined;
     this.rectStartX = undefined;
     this.rectStartY = undefined;
+  }
+
+  handleEvent(eventType, canvasX, canvasY) {
+    if (eventType === "mousedown") {
+      this.dragStartX = canvasX;
+      this.dragStartY = canvasY;
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return false;
+    } else if (eventType === "mousemove") {
+      if (this.dragStartX !== undefined) {
+        const deltaX = Math.abs(canvasX - this.dragStartX);
+        const deltaY = Math.abs(canvasY - this.dragStartY);
+        if (deltaX > deltaY) {
+          this.x = this.rectStartX + canvasX - this.dragStartX;
+          this.y = this.rectStartY;
+        } else {
+          this.x = this.rectStartX;
+          this.y = this.rectStartY + canvasY - this.dragStartY;
+        }
+      }
+      return false;
+    } else if (eventType == "mouseup") {
+      this.dragStartX = undefined;
+      this.dragStartY = undefined;
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return true;  // Trigger a new layout.
+    }
+  }
+}
+
+class TextRect extends Rect {
+  constructor(text, x, y, width, height) {
+    super(x, y, width, height);
+	  this.text = text;
   }
   
   draw(ctx, visibleBounds) {
@@ -44,37 +79,12 @@ class TextRect {
       ctx.strokeRect(this.x, this.y, this.width, this.height);
     }
   }
-  
   handleEvent(eventType, canvasX, canvasY) {
     if (eventType === "click") {
       console.log(this.text);
       return false;
-    } else if (eventType === "mousedown") {
-      this.dragStartX = canvasX;
-      this.dragStartY = canvasY;
-      this.rectStartX = this.x;
-      this.rectStartY = this.y;
-      return false;
-    } else if (eventType === "mousemove") {
-      if (this.dragStartX !== undefined) {
-        const deltaX = Math.abs(canvasX - this.dragStartX);
-        const deltaY = Math.abs(canvasY - this.dragStartY);
-        if (deltaX > deltaY) {
-          this.x = this.rectStartX + canvasX - this.dragStartX;
-          this.y = this.rectStartY;
-        } else {
-          this.x = this.rectStartX;
-          this.y = this.rectStartY + canvasY - this.dragStartY;
-        }
-      }
-      return false;
-    } else if (eventType == "mouseup") {
-      this.dragStartX = undefined;
-      this.dragStartY = undefined;
-      // TODO: Trigger a relayout.
-      this.rectStartX = this.x;
-      this.rectStartY = this.y;
-      return true;
+    } else {
+      return super.handleEvent(eventType, canvasX, canvasY);
     }
   }
 }
