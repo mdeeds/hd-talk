@@ -17,6 +17,11 @@ class TextRect {
 	  this.y = y;
     this.width = width;
     this.height = height;
+    
+    this.dragStartX = undefined;
+    this.dragStartY = undefined;
+    this.rectStartX = undefined;
+    this.rectStartY = undefined;
   }
   
   draw(ctx, visibleBounds) {
@@ -43,6 +48,33 @@ class TextRect {
   handleEvent(eventType, canvasX, canvasY) {
     if (eventType === "click") {
       console.log(this.text);
+      return false;
+    } else if (eventType === "mousedown") {
+      this.dragStartX = canvasX;
+      this.dragStartY = canvasY;
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return false;
+    } else if (eventType === "mousemove") {
+      if (this.dragStartX !== undefined) {
+        const deltaX = Math.abs(canvasX - this.dragStartX);
+        const deltaY = Math.abs(canvasY - this.dragStartY);
+        if (deltaX > deltaY) {
+          this.x = this.rectStartX + canvasX - this.dragStartX;
+          this.y = this.rectStartY;
+        } else {
+          this.x = this.rectStartX;
+          this.y = this.rectStartY + canvasY - this.dragStartY;
+        }
+      }
+      return false;
+    } else if (eventType == "mouseup") {
+      this.dragStartX = undefined;
+      this.dragStartY = undefined;
+      // TODO: Trigger a relayout.
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return true;
     }
   }
 }
@@ -80,11 +112,11 @@ class VLine {
 
 class MagicCanvas {
   constructor(canvas) {
-	this.canvas = canvas;
-  this.ctx = this.canvas.getContext('2d');
-	this._resize();
+    this.canvas = canvas;
+    this.ctx = this.canvas.getContext('2d');
+    this._resize();
 
-	window.addEventListener('resize', this._resize.bind(this));
+    window.addEventListener('resize', this._resize.bind(this));
     this.rects = [];
     this.rects.push(
       new TextRect('Hello, World!', 100, 100, 300, 50));
@@ -114,12 +146,36 @@ class MagicCanvas {
 		const canvasX = inverseMatrix.a * mouseX + inverseMatrix.c * mouseY + inverseMatrix.e;
 		const canvasY = inverseMatrix.b * mouseX + inverseMatrix.d * mouseY + inverseMatrix.f;
 
+    let needsLayout = false;
 		this.rects.forEach(rect => {
 		  if (canvasY >= rect.y && canvasY <= rect.y + rect.height) {
-        rect.handleEvent(event.type, canvasX, canvasY);
+        needsLayout |= rect.handleEvent(event.type, canvasX, canvasY);
 		  }
 		});
+    if (needsLayout) {
+      this._layout();
+    }
 	}
+  
+  _layout() {
+    // Sort rects by y-position, separating positive and negative rects
+    const positiveRects = this.rects.filter(rect => rect.y >= 0).sort((a, b) => a.y - b.y);
+    const negativeRects = this.rects.filter(rect => rect.y < 0).sort((a, b) => b.y - a.y);
+
+    // Position positive rects
+    let currentY = 0;
+    positiveRects.forEach(rect => {
+      rect.y = currentY;
+      currentY += rect.height;
+    });
+
+    // Position negative rects
+    let currentNegativeY = 0;
+    negativeRects.forEach(rect => {
+      currentNegativeY -= rect.height;
+      rect.y = currentNegativeY;
+    });
+  }
 
 	_resize() {
 		this.canvas.width = this.canvas.clientWidth;
