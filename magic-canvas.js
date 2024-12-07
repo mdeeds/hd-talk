@@ -121,8 +121,11 @@ class VLine {
 
 
 class MagicCanvas {
-  constructor(canvas) {
+  constructor(canvas, dataLayer) {
     this.canvas = canvas;
+    this.dataLayer = dataLayer;
+    console.assert(this.dataLayer);
+    
     this.ctx = this.canvas.getContext('2d');
     this._resize();
 

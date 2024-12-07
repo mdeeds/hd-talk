@@ -1,4 +1,5 @@
 const kIABufferSize = 4096;
+const kReduxRate = 8;
 
 class InfiniteArrayIterator {
 	constructor(arrayView) {
@@ -35,7 +36,6 @@ class InfiniteArrayView {
 		this.firstBufferOffset = offset % kIABufferSize;
 	}
 	
-	// TODO: Return a new InfiniteArrayIterator
 	*[Symbol.iterator]() {
 		return new InfiniteArrayIterator(this);
 	}
@@ -81,48 +81,57 @@ class InfiniteArray {
 	}
 }
 
+class Viewable {
+  constructor (mins, maxs) {
+    this.mins = mins;
+    this.maxs = maxs;
+  }
+}
+
+// TODO: Have DataAccumulator extend Viewable.  SampleAndPeaks should extend it too.
+// Concrete implementation of getView should go in here.
+
 
 class DataAccumulator {
   constructor() {
-	// Accumulated data at 1/8 resolution
-	this.minArray = new InfiniteArray();
+    // Accumulated data at 1/kReduxRate resolution
+    this.minArray = new InfiniteArray();
     this.maxArray = new InfiniteArray();
-	// If append is called with something that is not divisible by 8, the remainder
-	// is saved here for next time.
-	this.leftoverMin = new Float32Array(7);
-	this.leftoverMax = new Float32Array(7);
-	this.leftovers = 0;
-	this.currentMin = Infinity;
-	this.currentMax = -Infinity;
-	this.subAccumulator = null;
+    // If append is called with something that is not divisible by kReduxRate, the remainder
+    // is saved here for next time.
+    this.leftoverMin = new Float32Array(kReduxRate - 1);
+    this.leftoverMax = new Float32Array(kReduxRate - 1);
+    this.leftovers = 0;
+    this.currentMin = Infinity;
+    this.currentMax = -Infinity;
+    this.subAccumulator = null;
+    this.length = 0;
   }
   
-    _appendOne(x) {
+  _appendOne(x) {
 		this._appendMinMax(x, x);
-    }
+  }
 	
 	_appendMinMax(minX, maxX) {
-		// TODO: Handle an infinite buffer.
-		if (this.length > 512 * 1024 * 1024) {
-			return; 
-		}
-	    if (this.leftovers == 7) {
-			if (!this.subAccumulator) {
-				this.subAccumulator = new DataAccumulator();
-			}
-			const newMinX = Math.min(this.currentMin, minX);
-			const newMaxX = Math.max(this.currentMax, maxX);
-		    this.minArray.append(newMinX);
-		    this.maxArray.append(newMaxX);
-			this.subAccumulator._appendMinMax(newMinX, newMaxX);
-			++this.length;
-            this.leftovers = 0;
-		    this.currentMin = Infinity;
-			this.currentMax = -Infinity;		  
+	    if (this.leftovers === kReduxRate - 1) {
+        if (!this.subAccumulator) {
+          this.subAccumulator = new DataAccumulator();
+        }
+        const newMinX = Math.min(this.currentMin, minX);
+        const newMaxX = Math.max(this.currentMax, maxX);
+        this.minArray.append(newMinX);
+        this.maxArray.append(newMaxX);
+        this.subAccumulator._appendMinMax(newMinX, newMaxX);
+        ++this.length;
+        this.leftovers = 0;
+        this.currentMin = Infinity;
+        this.currentMax = -Infinity;		  
 	    } else {
-		  this.leftoverMin[this.leftovers] = minX;
-		  this.leftoverMax[this.leftovers] = maxX;
-		  ++this.leftovers;
+        this.currentMin = Math.min(this.currentMin, minX);
+        this.currentMax = Math.max(this.currentMax, maxX);
+        this.leftoverMin[this.leftovers] = minX;
+        this.leftoverMax[this.leftovers] = maxX;
+        ++this.leftovers;
 	    }
 	}
 
@@ -131,12 +140,6 @@ class DataAccumulator {
 		this._appendOne(x);
 	  }
   }
-
-	resizeArray(array) {
-		const newArray = new Float32Array(2 * array.length);
-		newArray.set(array);
-		return newArray;
-	}
 }
 
 class SamplesAndPeaks {
@@ -151,4 +154,13 @@ class SamplesAndPeaks {
 			this.samples.append(x);
 		}
 	}
+  
+  getView(offset, count, minSamples) {
+    let returnSamples = count;
+    let minSource = this.samples;
+    let maxSource = this.samples;
+    while (returnSamples / kReduxRate > minSamples) {
+      
+    }
+  }
 }

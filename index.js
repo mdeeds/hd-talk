@@ -19,6 +19,11 @@ let inputSourceNode = null;
 let peerAnalyser = null;
 let peerSourceNode = null;
 let localPeaks = null;
+let dataLayer = null;
+
+function getChannelId() {
+  return `HD938541-${document.getElementById('connectionId').value}`;
+}
 
 function init() {
 	peerStatus = document.getElementById('status');
@@ -85,8 +90,11 @@ function init() {
 		});
 	});
 
+  
+  dataLayer = new DataLayer(getChannelId());
+  
 	const workArea = document.getElementById('workArea');
-	const magicCanvas = new MagicCanvas(workArea);
+	const magicCanvas = new MagicCanvas(workArea, dataLayer);
 
 	const editButton = document.getElementById('editLyrics');
 	editButton.addEventListener('click', () => {
@@ -103,105 +111,13 @@ function init() {
 		});
 		
 	localPeaks = new SamplesAndPeaks();
-}
 
-function getChannelId() {
-  return `HD938541-${document.getElementById('connectionId').value}`;
 }
 
 
-function addConnHandlers() {
-	conn.on('data', function(data) {
-		addMessageToChat(data, 'Peer');
-	});
-	conn.on('close', function() {
-		console.log('connection close');
-	});
-	conn.on('error', function(err) {
-		console.log('connection error');
-		console.log(err);
-	});
-}
 
-function initialize(id) {
-	peer = new Peer(id);
-	peer.on('open', function(id) {
-		console.log(`Peer open: ${id}`);
-		if (id == getChannelId()) {
-		  peerStatus.innerHTML = 'Server';
-		} else {
-		  peerStatus.innerHTML = 'Client';
-		  otherId = getChannelId();
-		  join();
-		}
-	});
-	peer.on('connection', function(c) {
-		console.log(`Peer connection. other: ${c.peer}`);
-		otherId = c.peer;
-		peerStatus.innerHTML += " connected";
-		conn = c;
-		addConnHandlers();
-	});
-	peer.on('disconnected', function() {
-		console.log('Peer disconnected');
-	});
-	peer.on('close', function() {
-		console.log('Peer close');
-	});
-	peer.on('error', function(err) {
-		console.log(`Peer error: ${err.message}`);
-		console.log(err);
-		
-		if (!seenErrors.has(err.message)) {
-			seenErrors.add(err.message);
-			if (err.message = `ID "${getChannelId}" is taken`) {
-				initialize(null);
-			}
-		}
-	});
-	peer.on('call', function(call) {
-		console.log('Peer call (call recieved)');
-		const outgoingStream = audioCtx.createMediaStreamDestination();
-		inputSourceNode.connect(outgoingStream);
-		const analyser = audioCtx.createAnalyser();
-		inputSourceNode.connect(analyser);
-		const canvas = document.getElementById('dupeSignal');
-		const vu = new AudioVisualizer(canvas, analyser);
-		vu.start();
-		call.answer(outgoingStream.stream);
-		call.on('stream', function(incomingStream) {
-			// Ungodly hack to actually get the audio to flow
-			const a = new Audio();
-			a.muted = true;
-			a.srcObject = incomingStream;
-			a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
-			// End ungodly hack.
-			console.log('Stream Recieved');
-			if (!!peerSourceNode) {
-				peerSourceNode.disconnect();
-			}
-			incomingStream.addEventListener('active', () => { console.log('incomingStream active'); });
-			incomingStream.addEventListener('addtrack', () => { console.log('incomingStream addtrack'); });
-			incomingStream.addEventListener('inactive', () => { console.log('incomingStream inactive'); });
-			incomingStream.addEventListener('removetrack', () => { console.log('incomingStream removetrack'); });
-			peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
-			peerSourceNode.connect(peerAnalyser);
-		});
-		
-	});
-}
 
-function join() {
-	console.log('join');
-	if (conn) { conn.close() };
-	const channel = getChannelId();
-	conn = peer.connect(channel);
-	conn.on('open', function() {
-		console.log('connection open');
-	    peerStatus.innerHTML += " connected";	
-	});
-	addConnHandlers();
-}
+
  
 function addMessageToChat(message, sender) {
   const messageElement = document.createElement('div');
