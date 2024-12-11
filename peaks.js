@@ -92,7 +92,7 @@ class Viewable {
 // Concrete implementation of getView should go in here.
 
 
-class DataAccumulator {
+class DataAccumulator extends Viewable {
   constructor() {
     // Accumulated data at 1/kReduxRate resolution
     this.minArray = new InfiniteArray();
@@ -142,7 +142,7 @@ class DataAccumulator {
   }
 }
 
-class SamplesAndPeaks {
+class SamplesAndPeaks extends Viewable {
 	constructor() {
 		this.samples = new InfiniteArray();
 		this.peaks = new DataAccumulator();
@@ -156,11 +156,16 @@ class SamplesAndPeaks {
 	}
   
   getView(offset, count, minSamples) {
-    let returnSamples = count;
-    let minSource = this.samples;
-    let maxSource = this.samples;
-    while (returnSamples / kReduxRate > minSamples) {
-      
+    let returnSamples = count; 
+    let minSource = this.samples; 
+    let maxSource = this.samples; 
+    while (returnSamples / kReduxRate > minSamples && this.peaks) {
+      returnSamples = Math.ceil(returnSamples / kReduxRate); 
+      minSource = this.peaks.minArray; 
+      maxSource = this.peaks.maxArray;
     }
+    const viewMin = new InfiniteArrayView(minSource, offset, returnSamples);
+    const viewMax = new InfiniteArrayView(maxSource, offset, returnSamples);
+    return new Viewable(viewMin, viewMax);
   }
 }

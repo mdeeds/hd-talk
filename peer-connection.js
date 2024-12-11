@@ -1,7 +1,7 @@
 class PeerConnection {
   constructor(channelId) {
     this.channelId = channelId;
-    this.peerId = peerId;
+    this.peerId = null; // Initialize peerId as null
     this.peer = null;
     this.conn = null;
     this.otherId = undefined;
@@ -12,88 +12,95 @@ class PeerConnection {
     this._initialize();
   }
 
-  _join() {
-    console.log('join');
-    if (conn) { conn.close() };
-    const channel = this.channelId;
-    conn = peer.connect(channel);
-    conn.on('open', function() {
-      console.log('connection open');
-        peerStatus.innerHTML += " connected";	
-    });
-    addConnHandlers();
+  _initialize() {
+    // Ensure that peerId is set properly
+    this.peer = new Peer(this.channelId);
+    this.peer.on('open', this._onPeerOpen.bind(this));
+    this.peer.on('connection', this._onPeerConnection.bind(this));
+    this.peer.on('disconnected', this._onPeerDisconnected.bind(this));
+    this.peer.on('close', this._onPeerClose.bind(this));
+    this.peer.on('error', this._onPeerError.bind(this));
+    this.peer.on('call', this._onPeerCall.bind(this));
   }
 
-  _initialize() {
-    this.peer = new Peer(id);
-    this.peer.on('open', function(id) {
-      console.log(`Peer open: ${id}`);
-      if (id === this.channelId) {
-        peerStatus.innerHTML = 'Server';
-      } else {
-        peerStatus.innerHTML = 'Client';
-        otherId = this.channelId;
-        this._join();
-      }
-    });
-    this.peer.on('connection', function(c) {
-      console.log(`Peer connection. other: ${c.peer}`);
-      otherId = c.peer;
-      peerStatus.innerHTML += " connected";
-      conn = c;
-      addConnHandlers();
-    });
-    this.peer.on('disconnected', function() {
-      console.log('Peer disconnected');
-    });
-    this.peer.on('close', function() {
-      console.log('Peer close');
-    });
-    this.peer.on('error', function(err) {
-      console.log(`Peer error: ${err.message}`);
-      console.log(err);
-      
-      if (!seenErrors.has(err.message)) {
-        seenErrors.add(err.message);
-        if (err.message = `ID "${getChannelId}" is taken`) {
-          initialize(null);
-        }
-      }
-    });
-    this.peer.on('call', function(call) {
-      console.log('Peer call (call recieved)');
-      const outgoingStream = audioCtx.createMediaStreamDestination();
-      inputSourceNode.connect(outgoingStream);
-      const analyser = audioCtx.createAnalyser();
-      inputSourceNode.connect(analyser);
-      const canvas = document.getElementById('dupeSignal');
-      const vu = new AudioVisualizer(canvas, analyser);
-      vu.start();
-      call.answer(outgoingStream.stream);
-      call.on('stream', function(incomingStream) {
-        // Ungodly hack to actually get the audio to flow
-        const a = new Audio();
-        a.muted = true;
-        a.srcObject = incomingStream;
-        a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
-        // End ungodly hack.
-        console.log('Stream Recieved');
-        if (!!peerSourceNode) {
-          peerSourceNode.disconnect();
-        }
-        incomingStream.addEventListener('active', () => { console.log('incomingStream active'); });
-        incomingStream.addEventListener('addtrack', () => { console.log('incomingStream addtrack'); });
-        incomingStream.addEventListener('inactive', () => { console.log('incomingStream inactive'); });
-        incomingStream.addEventListener('removetrack', () => { console.log('incomingStream removetrack'); });
-        peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
-        peerSourceNode.connect(peerAnalyser);
-      });
-      
-    });
+  _onPeerOpen(id) {
+    console.log(`Peer open: ${id}`);
+    this.peerId = id; // Set peerId when the peer is opened
+    if (this.channelId === this.peerId) {
+      peerStatus.innerHTML = 'Server';
+    } else {
+      peerStatus.innerHTML = 'Client';
+      this.otherId = this.channelId;
+      this._join();
+    }
+  }
+
+  _onPeerConnection(c) {
+    console.log(`Peer connection. Other: ${c.peer}`);
+    this.otherId = c.peer;
+    peerStatus.innerHTML += " connected";
+    this.conn = c;
+    this.addConnHandlers();
+  }
+
+  _onPeerDisconnected() {
+    console.log('Peer disconnected');
+  }
+
+  _onPeerClose() {
+    console.log('Peer close');
+  }
+
+  _onPeerError(err) {
+    console.log(`Peer error: ${err.message}`);
+    if (err.message === `ID "${this.channelId}" is taken`) {
+      // Handle error logic (e.g., re-initialize or retry connection)
+      initialize(null);
+    }
+  }
+
+  _onPeerCall(call) {
+    console.log('Peer call (call received)');
+    const outgoingStream = audioCtx.createMediaStreamDestination();
+    inputSourceNode.connect(outgoingStream);
+    const analyser = audioCtx.createAnalyser();
+    inputSourceNode.connect(analyser);
+    const canvas = document.getElementById('dupeSignal');
+    const vu = new AudioVisualizer(canvas, analyser);
+    vu.start();
+
+    call.answer(outgoingStream.stream);
+    call.on('stream', (incomingStream) => this._handleIncomingStream(incomingStream));
+  }
+
+  _handleIncomingStream(incomingStream) {
+    console.log('Stream Received');
+    if (peerSourceNode) {
+      peerSourceNode.disconnect();
+    }
+
+    // Listen for stream events for better management
+    incomingStream.addEventListener('active', () => console.log('incomingStream active'));
+    incomingStream.addEventListener('addtrack', () => console.log('incomingStream addtrack'));
+    incomingStream.addEventListener('inactive', () => console.log('incomingStream inactive'));
+    incomingStream.addEventListener('removetrack', () => console.log('incomingStream removetrack'));
+
+    // Properly handle stream and create media source node
+    peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+    peerSourceNode.connect(peerAnalyser);
+  }
+
+  _join() {
+    console.log('join');
+    if (this.conn) {
+      this.conn.close();
+    }
+    this.conn = this.peer.connect(this.channelId);
+    this.addConnHandlers();
   }
 
   connect(otherPeerId) {
-    console.log('join');
+    console.log('Connecting to peer...');
     if (this.conn) {
       this.conn.close();
     }
@@ -103,26 +110,20 @@ class PeerConnection {
 
   call(otherPeerId, outgoingStream) {
     const call = this.peer.call(otherPeerId, outgoingStream);
-    call.on('error', (err) => {
-      console.log(`Call error: ${err.message}`);
-    });
+    call.on('error', (err) => console.log(`Call error: ${err.message}`));
     return call;
   }
 
   addConnHandlers() {
-    this.conn.on('data', function(data) {
+    this.conn.on('data', (data) => {
       if (data.command === 'chat') {
-        // TODO raise a 'chat' event.
+        // Handle chat data
       } else if (data.command === 'set') {
-        // TODO: raise a 'set' event
+        // Handle set data
       }
     });
-    this.conn.on('close', function() {
-      console.log('connection close');
-    });
-    this.conn.on('error', function(err) {
-      console.log('connection error');
-      console.log(err);
-    });
+
+    this.conn.on('close', () => console.log('Connection closed'));
+    this.conn.on('error', (err) => console.log('Connection error: ', err));
   }
 }

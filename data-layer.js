@@ -52,4 +52,5 @@ class DataLayer {
     const result = await getRequest.done;
     return result ? JSON.parse(result.value) : null;
   }
+  
 }
