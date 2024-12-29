@@ -1,6 +1,3 @@
-
-let peer = null;
-let conn = null;
 let peerStatus;
 let otherId = undefined;
 let callButton;
@@ -14,6 +11,7 @@ let scanButton;
 let localPeaks = null;
 let dataLayer = null;
 
+// IO for all communications with remote peer.
 let peerConnection = null;
 
 // Unique identifiers for the input and output devices
@@ -47,37 +45,37 @@ async function changeAudioOutput(deviceId) {
     console.error("AudioContext or localOutputNode not initialized.");
     return;
   }
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Disconnect the master output from the current destination
+      localOutputNode.disconnect();
+      // Get the MediaStreamTrack for the new output device
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: deviceId },
+        video: false,
+      });
 
-  try {
-    // Disconnect the master output from the current destination
-    localOutputNode.disconnect();
+      // Create a new MediaStreamDestinationNode for the selected device
+      const destination = audioCtx.createMediaStreamDestination();
 
-    // Get the MediaStreamTrack for the new output device
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: { exact: deviceId } },
-      video: false,
-    });
+      // We need to cancel all of the *input* tracks.
+      for (const track of stream.getAudioTracks()) {
+        destination.stream.addTrack(track);
+        // Stop the temporary stream (important to release the device)
+        track.stop();
+      }
+      // Connect the master output to the new destination
+      localOutputNode.connect(destination);
+      stream.getTracks().forEach(t => t.stop());
 
-    // Create a new MediaStreamDestinationNode for the selected device
-    const destination = audioCtx.createMediaStreamDestination();
-
-    // We need to cancel all of the *input* tracks.
-    for (const track of stream.getAudioTracks()) {
-      destination.stream.addTrack(track);
-      // Stop the temporary stream (important to release the device)
-      track.stop();
+      console.log(`Output device changed to: ${deviceId}`);
+    } catch (error) {
+      console.error("Error changing audio output:", error);
+      reject(error);
     }
-    // Connect the master output to the new destination
-    localOutputNode.connect(destination);
-    stream.getTracks().forEach(t => t.stop());
-
-    console.log(`Output device changed to: ${deviceId}`);
-  } catch (error) {
-    console.error("Error changing audio output:", error);
-    // Optionally revert to the default destination or handle the error
-    localOutputNode.connect(audioCtx.destination);
-  }
-  selectedOutputDevice = deviceId;
+    selectedOutputDevice = deviceId;
+    resolve();
+  });
 }
 
 function init() {
@@ -96,9 +94,11 @@ function init() {
 	 sendMessageButton.addEventListener('click', () => {
 	  const message = messageInput.value;
 	  if (message) {
-		conn.send(message);
-		addMessageToChat(message, 'You');
-		messageInput.value = '';
+      // TODO: this needs to change to structured data. 
+      // E.g. { type: 'message' text: message }
+      peerConnection.sendMessage(message);
+      addMessageToChat(message, 'You');
+      messageInput.value = '';
 	  }
 	});
 	// Event listeners for scan buttons
@@ -112,37 +112,22 @@ function init() {
 	  // Update audio input here, using the selected device ID
 	});
 
-	outputList.addEventListener('change', (event) => {
-    changeAudioOutput(event.target.value);
+	outputList.addEventListener('change', async (event) => {
+    await changeAudioOutput(event.target.value);
 	});
 
-	callButton.addEventListener('click', () => {
-		const outgoingStream = audioCtx.createMediaStreamDestination();
-		inputSourceNode.connect(outgoingStream);
+	callButton.addEventListener('click', async () => {
+		const outgoingStreamDestination = audioCtx.createMediaStreamDestination();
+		inputSourceNode.connect(outgoingStreamDestination);
 		const analyser = audioCtx.createAnalyser();
 		inputSourceNode.connect(analyser);
 		const canvas = document.getElementById('dupeSignal');
 		const vu = new AudioVisualizer(canvas, analyser);
 		vu.start();
-		
-		const call = peer.call(otherId, outgoingStream.stream);
-		call.on('error', (err) => { 
-		  console.log(`Call error: ${err.message}`);
-		});
-		call.on('stream', (incomingStream) => {
-			// Ungodly hack to actually get the audio to flow
-			const a = new Audio();
-			a.muted = true;
-			a.srcObject = incomingStream;
-			a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
-			// End ungodly hack.
-			console.log('Call stream');
-		  if (!!peerSourceNode) {
-			  peerSourceNode.disconnect();
-		  }
-		  peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
-		  peerSourceNode.connect(peerAnalyser);
-		});
+    
+    peerSourceNode = await peerConnection.call(audioCtx, outgoingStreamDestination);
+    peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+    peerSourceNode.connect(peerAnalyser);
 	});
 
   
@@ -168,11 +153,6 @@ function init() {
 	localPeaks = new SamplesAndPeaks();
 
 }
-
-
-
-
-
  
 function addMessageToChat(message, sender) {
   const messageElement = document.createElement('div');
@@ -181,7 +161,6 @@ function addMessageToChat(message, sender) {
   messagesDiv.appendChild(messageElement);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
- 
 
 async function setInput(id) {
   selectedInputDevice = id;
@@ -210,8 +189,8 @@ async function setInput(id) {
 	if (!!inputSourceNode) {
 		inputSourceNode.disconnect();
 	}
-    inputSourceNode = audioCtx.createMediaStreamSource(stream);
-    inputSourceNode.connect(inputAnalyser);
+  inputSourceNode = audioCtx.createMediaStreamSource(stream);
+  inputSourceNode.connect(inputAnalyser);
 	
 	await audioCtx.audioWorklet.addModule('worklet-recorder.js');
 	const worklet = new AudioWorkletNode(audioCtx, 'worklet-recorder');
@@ -222,85 +201,75 @@ async function setInput(id) {
 }
 
 // Function to enumerate audio devices
-function enumerateDevices() {
+async function enumerateDevices() {
 	console.log('Scanning...');
 	audioCtx = new AudioContext();
   localOutputNode = audioCtx.createGain();
   localOutputNode.connect(audioCtx.destination);
-  navigator.mediaDevices.getUserMedia({
+  await navigator.mediaDevices.getUserMedia({
 	  audio: {
 		  echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false,
           latencyHint: 'low'
 		  },
-		  video: false })
-    .then(() => {
-      navigator.mediaDevices.enumerateDevices()
-        .then(devices => {
-		console.log('Enumerating...');
-      const inputDevices = devices.filter(device => device.kind === 'audioinput');
-      const outputDevices = devices.filter(device => device.kind === 'audiooutput');
+		  video: false });
+      
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  console.log('Enumerating...');
+  const inputDevices = devices.filter(device => device.kind === 'audioinput');
+  const outputDevices = devices.filter(device => device.kind === 'audiooutput');
 
-      // Clear existing lists
-      inputList.innerHTML = '';
-      outputList.innerHTML = '';
+  // Clear existing lists
+  inputList.innerHTML = '';
+  outputList.innerHTML = '';
 
-      // Create input device radio buttons
-      inputDevices.forEach(device => {
-		  console.log(`input: ${device.name}`);
-        const radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = 'inputDevice';
-        radio.value = device.deviceId;
-        radio.id = `inputDevice_${device.deviceId}`;
+  // Create input device radio buttons
+  for (const device of inputDevices) {
+    console.log(`input: ${device.label}`);
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'inputDevice';
+    radio.value = device.deviceId;
+    radio.id = `inputDevice_${device.deviceId}`;
 
-        const label = document.createElement('label');
-        label.htmlFor = `inputDevice_${device.deviceId}`;
-        label.textContent = device.label || device.deviceId;
+    const label = document.createElement('label');
+    label.htmlFor = `inputDevice_${device.deviceId}`;
+    label.textContent = device.label || device.deviceId;
 
-        inputList.appendChild(radio);
-        inputList.appendChild(label);
-        inputList.appendChild(document.createElement('br'));
+    inputList.appendChild(radio);
+    inputList.appendChild(label);
+    inputList.appendChild(document.createElement('br'));
 
-        // Set the first input device as selected by default
-        if (!selectedInputDevice) {
-          radio.checked = true;
-		  setInput(device.deviceId);
-        }
-      });
+    // Set the first input device as selected by default
+    if (!selectedInputDevice) {
+      radio.checked = true;
+      setInput(device.deviceId);
+    }
+  }
 
-      // Create output device radio buttons
-      outputDevices.forEach(device => {
-		  console.log(`output: ${device.name}`);
-        const radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = 'outputDevice';
-        radio.value = device.deviceId;
-        radio.id = `outputDevice_${device.deviceId}`;
+  // Create output device radio buttons
+  for (const device of outputDevices) {
+    console.log(`output: ${device.label}`);
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'outputDevice';
+    radio.value = device.deviceId;
+    radio.id = `outputDevice_${device.deviceId}`;
 
-        const label = document.createElement('label');
-        label.htmlFor = `outputDevice_${device.deviceId}`;
-        label.textContent = device.label || device.deviceId;
+    const label = document.createElement('label');
+    label.htmlFor = `outputDevice_${device.deviceId}`;
+    label.textContent = device.label || device.deviceId;
 
-        outputList.appendChild(radio);
-        outputList.appendChild(label);
-        outputList.appendChild(document.createElement('br'));
+    outputList.appendChild(radio);
+    outputList.appendChild(label);
+    outputList.appendChild(document.createElement('br'));
 
-        // Set the first output device as selected by default
-        if (!selectedOutputDevice) {
-          radio.checked = true;
-          // Set the output device asynchronously.
-          (async ()=>{ changeAudioOutput(device.deviceId); })();
-        }
-      });
-    })
-        .catch(error => {
-          console.error('Error enumerating devices:', error);
-        });
-    })
-    .catch(error => {
-      console.error('Error accessing microphone:', error);
-    });
+    // Set the first output device as selected by default
+    if (!selectedOutputDevice) {
+      radio.checked = true;
+      await changeAudioOutput(device.deviceId);
+    }
+  }
 }
 

@@ -58,9 +58,6 @@ class DataLayer {
 }
 
 ==== index.js ====
-
-let peer = null;
-let conn = null;
 let peerStatus;
 let otherId = undefined;
 let callButton;
@@ -74,6 +71,7 @@ let scanButton;
 let localPeaks = null;
 let dataLayer = null;
 
+// IO for all communications with remote peer.
 let peerConnection = null;
 
 // Unique identifiers for the input and output devices
@@ -868,10 +866,15 @@ class PeerConnection extends EventTarget {
     this._addConnHandlers();
   }
 
-  call(otherPeerId, outgoingStream) {
-    const call = this.peer.call(otherPeerId, outgoingStream);
-    call.on('error', (err) => console.log(`Call error: ${err.message}`));
-    return call;
+  //// This appears to be unused.
+  //call(otherPeerId, outgoingStream) {
+  //  const call = this.peer.call(otherPeerId, outgoingStream);
+  //  call.on('error', (err) => console.log(`Call error: ${err.message}`));
+  //  return call;
+  //}
+  
+  sendMessage(message) {
+    this.conn.send(message);
   }
 
   _addConnHandlers() {

@@ -8,7 +8,8 @@ class WorkletRecorder extends AudioWorkletProcessor {
       const samples = channels[0];
       // Caller expects monophonic data, so only return the first channel.
       this.port.postMessage({ 
-        timestamp: timestamp,
+        timestamp: currentTime,
+        frame: currentFrame,
         samples: samples, 
       });
       return true;

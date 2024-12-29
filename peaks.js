@@ -94,9 +94,10 @@ class Viewable {
 
 class DataAccumulator extends Viewable {
   constructor() {
+    super(new InfiniteArray(), new InfiniteArray());
     // Accumulated data at 1/kReduxRate resolution
-    this.minArray = new InfiniteArray();
-    this.maxArray = new InfiniteArray();
+    this.minArray = super.mins;
+    this.maxArray = super.maxs;
     // If append is called with something that is not divisible by kReduxRate, the remainder
     // is saved here for next time.
     this.leftoverMin = new Float32Array(kReduxRate - 1);
@@ -144,7 +145,9 @@ class DataAccumulator extends Viewable {
 
 class SamplesAndPeaks extends Viewable {
 	constructor() {
-		this.samples = new InfiniteArray();
+    const s = new InfiniteArray();
+    super(s, s);
+		this.samples = s;
 		this.peaks = new DataAccumulator();
 	}
 	

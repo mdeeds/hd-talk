@@ -1,5 +1,6 @@
 class PeerConnection extends EventTarget {
   constructor(channelId) {
+    super();
     this.channelId = channelId;
     this.peerId = null; // Initialize peerId as null
     this.peer = null;
@@ -21,10 +22,34 @@ class PeerConnection extends EventTarget {
     this._addConnHandlers();
   }
 
-  call(otherPeerId, outgoingStream) {
-    const call = this.peer.call(otherPeerId, outgoingStream);
-    call.on('error', (err) => console.log(`Call error: ${err.message}`));
-    return call;
+  //// This appears to be unused.
+  //call(otherPeerId, outgoingStream) {
+  //  const call = this.peer.call(otherPeerId, outgoingStream);
+  //  call.on('error', (err) => console.log(`Call error: ${err.message}`));
+  //  return call;
+  //}
+  
+  sendMessage(message) {
+    this.conn.send(message);
+  }
+  
+  async call(audioCtx, outgoingStreamDestination) {
+    return new Promise((resolve, reject) => {
+   		const call = this.peer.call(this.otherId, outgoingStreamDestination.stream);
+      call.on('error', (err) => { 
+        console.log(`Call error: ${err.message}`);
+      });
+      call.on('stream', (incomingStream) => {
+        // Ungodly hack to actually get the audio to flow
+        const a = new Audio();
+        a.muted = true;
+        a.srcObject = incomingStream;
+        a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
+        // End ungodly hack.
+        console.log('Call stream');
+        resolve(audioCtx.createMediaStreamSource(incomingStream));
+      });
+    });
   }
 
   _addConnHandlers() {
