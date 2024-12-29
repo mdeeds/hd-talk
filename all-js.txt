@@ -1,0 +1,1065 @@
+
+==== data-layer.js ====
+class DataLayer {
+  constructor(databaseName) {
+    this.databaseName = databaseName;
+    this.db = null;
+  }
+
+  async _getDatabase() {
+    if (!this.db) {
+      this.db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(this.databaseName, 1);
+        request.onerror = event => reject(event.target.error);
+        request.onsuccess = event => resolve(event.target.result);
+        request.onupgradeneeded = event => {
+          const db = event.target.result;
+          const objectStore = db.createObjectStore('data', { keyPath: 'key' });
+        };
+      });
+    }
+    return this.db;
+  }
+
+  async setFloat32Array(key, data) {
+    const db = await this._getDatabase();
+    const transaction = db.transaction(['data'], 'readwrite');
+    const objectStore = transaction.objectStore('data');
+    const putRequest = objectStore.put({ key, value: data });
+    await putRequest.done;
+  }
+
+  async getFloat32Array(key) {
+    const db = await this._getDatabase();
+    const transaction = db.transaction(['data'], 'readonly');
+    const objectStore = transaction.objectStore('data');
+    const getRequest = objectStore.get(key);
+    const result = await getRequest.done;
+    return result ? result.value : null;
+  }
+
+  async setJSObject(key, object) {
+    const db = await this._getDatabase();
+    const transaction = db.transaction(['data'], 'readwrite');
+    const objectStore = transaction.objectStore('data');
+    const putRequest = objectStore.put({ key, value: JSON.stringify(object) });
+    await putRequest.done;
+  }
+
+  async getJSObject(key) {
+    const db = await this._getDatabase();
+    const transaction = db.transaction(['data'], 'readonly');
+    const objectStore = transaction.objectStore('data');
+    const getRequest = objectStore.get(key);
+    const result = await getRequest.done;
+    return result ? JSON.parse(result.value) : null;
+  }
+  
+}
+
+==== index.js ====
+
+let peer = null;
+let conn = null;
+let peerStatus;
+let otherId = undefined;
+let callButton;
+let seenErrors;
+let messagesDiv;
+let messageInput;
+let sendMessageButton;
+let inputList;
+let outputList;
+let scanButton;
+let localPeaks = null;
+let dataLayer = null;
+
+let peerConnection = null;
+
+// Unique identifiers for the input and output devices
+let selectedInputDevice = null;
+let selectedOutputDevice = null;
+
+let audioCtx = null;
+// Audio nodes establishing the audio graph.
+
+// TODO: We need to figure out how to set up appropriate monitoring of the input.
+// inputSourceNode -> inputAnalyser
+// inputSourceNode -> tapeDeckInput
+// tapeDeckOutput -> localOutputNode
+// peerSourceNode -> peerAnalyser
+// peerSourceNode -> localOutputNode
+// localOutputNode -> audioCtx.destination
+// localOutputNode -> peerBroadcastNode
+// inputSourceNode -> peerBroadcastNode
+let inputAnalyser = null;
+let inputSourceNode = null;
+let peerAnalyser = null;
+let peerSourceNode = null;
+let localOutputNode = null;
+
+function getChannelId() {
+  return `HD938541-${document.getElementById('connectionId').value}`;
+}
+
+async function changeAudioOutput(deviceId) {
+  if (!audioCtx || !localOutputNode) {
+    console.error("AudioContext or localOutputNode not initialized.");
+    return;
+  }
+
+  try {
+    // Disconnect the master output from the current destination
+    localOutputNode.disconnect();
+
+    // Get the MediaStreamTrack for the new output device
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    });
+
+    // Create a new MediaStreamDestinationNode for the selected device
+    const destination = audioCtx.createMediaStreamDestination();
+
+    // We need to cancel all of the *input* tracks.
+    for (const track of stream.getAudioTracks()) {
+      destination.stream.addTrack(track);
+      // Stop the temporary stream (important to release the device)
+      track.stop();
+    }
+    // Connect the master output to the new destination
+    localOutputNode.connect(destination);
+    stream.getTracks().forEach(t => t.stop());
+
+    console.log(`Output device changed to: ${deviceId}`);
+  } catch (error) {
+    console.error("Error changing audio output:", error);
+    // Optionally revert to the default destination or handle the error
+    localOutputNode.connect(audioCtx.destination);
+  }
+  selectedOutputDevice = deviceId;
+}
+
+function init() {
+	peerStatus = document.getElementById('status');
+	callButton = document.getElementById('call');
+	seenErrors = new Set();
+	messagesDiv = document.getElementById('messages');
+	messageInput = document.getElementById('messageInput');
+	sendMessageButton = document.getElementById('sendMessageButton');
+	inputList = document.getElementById('input-list');
+	outputList = document.getElementById('output-list');
+	scanButton = document.getElementById('scan');
+	
+  peerConnection = new PeerConnection(getChannelId());
+	
+	 sendMessageButton.addEventListener('click', () => {
+	  const message = messageInput.value;
+	  if (message) {
+		conn.send(message);
+		addMessageToChat(message, 'You');
+		messageInput.value = '';
+	  }
+	});
+	// Event listeners for scan buttons
+	scanButton.addEventListener('click', () => {
+	  enumerateDevices();
+	});
+
+	// Event listeners for radio button changes
+	inputList.addEventListener('change', (event) => {
+	  selectedInputDevice = event.target.value;
+	  // Update audio input here, using the selected device ID
+	});
+
+	outputList.addEventListener('change', (event) => {
+    changeAudioOutput(event.target.value);
+	});
+
+	callButton.addEventListener('click', () => {
+		const outgoingStream = audioCtx.createMediaStreamDestination();
+		inputSourceNode.connect(outgoingStream);
+		const analyser = audioCtx.createAnalyser();
+		inputSourceNode.connect(analyser);
+		const canvas = document.getElementById('dupeSignal');
+		const vu = new AudioVisualizer(canvas, analyser);
+		vu.start();
+		
+		const call = peer.call(otherId, outgoingStream.stream);
+		call.on('error', (err) => { 
+		  console.log(`Call error: ${err.message}`);
+		});
+		call.on('stream', (incomingStream) => {
+			// Ungodly hack to actually get the audio to flow
+			const a = new Audio();
+			a.muted = true;
+			a.srcObject = incomingStream;
+			a.addEventListener('canplaythrough', () => { console.log('ready to flow'); });
+			// End ungodly hack.
+			console.log('Call stream');
+		  if (!!peerSourceNode) {
+			  peerSourceNode.disconnect();
+		  }
+		  peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+		  peerSourceNode.connect(peerAnalyser);
+		});
+	});
+
+  
+  dataLayer = new DataLayer(getChannelId());
+  
+	const workArea = document.getElementById('workArea');
+	const magicCanvas = new MagicCanvas(workArea, dataLayer);
+
+	const editButton = document.getElementById('editLyrics');
+	editButton.addEventListener('click', () => {
+		  const popup = window.open('popup.html', 'Popup', 'width=400,height=200');
+	});
+	window.addEventListener('message', (event) => {
+		const data = event.data;
+			switch (data.command) {
+				case 'updateLyrics':
+  				console.log('New Lyrics:\n' + data.text);
+				magicCanvas.replaceText(data.text);
+				break;
+			}
+		});
+		
+	localPeaks = new SamplesAndPeaks();
+
+}
+
+
+
+
+
+ 
+function addMessageToChat(message, sender) {
+  const messageElement = document.createElement('div');
+  messageElement.textContent = `${sender}: ${message}`;   
+
+  messagesDiv.appendChild(messageElement);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+ 
+
+async function setInput(id) {
+  selectedInputDevice = id;
+      const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: id,
+		  echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          latencyHint: 'low'
+      }
+    });
+
+	if (!inputAnalyser) {
+		inputAnalyser = audioCtx.createAnalyser();
+		const vuCanvas = document.getElementById('inputSignal');
+		const vu = new AudioVisualizer(vuCanvas, inputAnalyser);
+		vu.start();
+	}
+	if (!peerAnalyser) {
+		peerAnalyser = audioCtx.createAnalyser();
+		const vuCanvas = document.getElementById('peerSignal');
+		const vu = new AudioVisualizer(vuCanvas, peerAnalyser);
+		vu.start();
+	}
+	if (!!inputSourceNode) {
+		inputSourceNode.disconnect();
+	}
+    inputSourceNode = audioCtx.createMediaStreamSource(stream);
+    inputSourceNode.connect(inputAnalyser);
+	
+	await audioCtx.audioWorklet.addModule('worklet-recorder.js');
+	const worklet = new AudioWorkletNode(audioCtx, 'worklet-recorder');
+	inputSourceNode.connect(worklet);
+	worklet.port.onmessage = (event) => { 
+		localPeaks.appendArray(event.data.samples);
+	};
+}
+
+// Function to enumerate audio devices
+function enumerateDevices() {
+	console.log('Scanning...');
+	audioCtx = new AudioContext();
+  localOutputNode = audioCtx.createGain();
+  localOutputNode.connect(audioCtx.destination);
+  navigator.mediaDevices.getUserMedia({
+	  audio: {
+		  echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          latencyHint: 'low'
+		  },
+		  video: false })
+    .then(() => {
+      navigator.mediaDevices.enumerateDevices()
+        .then(devices => {
+		console.log('Enumerating...');
+      const inputDevices = devices.filter(device => device.kind === 'audioinput');
+      const outputDevices = devices.filter(device => device.kind === 'audiooutput');
+
+      // Clear existing lists
+      inputList.innerHTML = '';
+      outputList.innerHTML = '';
+
+      // Create input device radio buttons
+      inputDevices.forEach(device => {
+		  console.log(`input: ${device.name}`);
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'inputDevice';
+        radio.value = device.deviceId;
+        radio.id = `inputDevice_${device.deviceId}`;
+
+        const label = document.createElement('label');
+        label.htmlFor = `inputDevice_${device.deviceId}`;
+        label.textContent = device.label || device.deviceId;
+
+        inputList.appendChild(radio);
+        inputList.appendChild(label);
+        inputList.appendChild(document.createElement('br'));
+
+        // Set the first input device as selected by default
+        if (!selectedInputDevice) {
+          radio.checked = true;
+		  setInput(device.deviceId);
+        }
+      });
+
+      // Create output device radio buttons
+      outputDevices.forEach(device => {
+		  console.log(`output: ${device.name}`);
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'outputDevice';
+        radio.value = device.deviceId;
+        radio.id = `outputDevice_${device.deviceId}`;
+
+        const label = document.createElement('label');
+        label.htmlFor = `outputDevice_${device.deviceId}`;
+        label.textContent = device.label || device.deviceId;
+
+        outputList.appendChild(radio);
+        outputList.appendChild(label);
+        outputList.appendChild(document.createElement('br'));
+
+        // Set the first output device as selected by default
+        if (!selectedOutputDevice) {
+          radio.checked = true;
+          // Set the output device asynchronously.
+          (async ()=>{ changeAudioOutput(device.deviceId); })();
+        }
+      });
+    })
+        .catch(error => {
+          console.error('Error enumerating devices:', error);
+        });
+    })
+    .catch(error => {
+      console.error('Error accessing microphone:', error);
+    });
+}
+
+
+
+==== magic-canvas.js ====
+class VisibleBounds {
+  constructor(ctx) {
+    const inverseMatrix = ctx.getTransform().inverse();
+    this.left = inverseMatrix.e;
+    this.right = inverseMatrix.a * ctx.canvas.width + inverseMatrix.e;
+    this.top = inverseMatrix.f;
+    this.bottom = inverseMatrix.d * ctx.canvas.height + inverseMatrix.f;
+    this.width = this.right - this.left;
+    this.height = this.bottom - this.top;
+  }
+}
+
+class Rect {
+  constructor(x, y, width, height) {
+	  this.x = x;
+	  this.y = y;
+    this.width = width;
+    this.height = height;
+    
+    this.dragStartX = undefined;
+    this.dragStartY = undefined;
+    this.rectStartX = undefined;
+    this.rectStartY = undefined;
+  }
+
+  handleEvent(eventType, canvasX, canvasY) {
+    if (eventType === "mousedown") {
+      this.dragStartX = canvasX;
+      this.dragStartY = canvasY;
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return false;
+    } else if (eventType === "mousemove") {
+      if (this.dragStartX !== undefined) {
+        const deltaX = Math.abs(canvasX - this.dragStartX);
+        const deltaY = Math.abs(canvasY - this.dragStartY);
+        if (deltaX > deltaY) {
+          this.x = this.rectStartX + canvasX - this.dragStartX;
+          this.y = this.rectStartY;
+        } else {
+          this.x = this.rectStartX;
+          this.y = this.rectStartY + canvasY - this.dragStartY;
+        }
+      }
+      return false;
+    } else if (eventType == "mouseup") {
+      this.dragStartX = undefined;
+      this.dragStartY = undefined;
+      this.rectStartX = this.x;
+      this.rectStartY = this.y;
+      return true;  // Trigger a new layout.
+    }
+  }
+}
+
+class TextRect extends Rect {
+  constructor(text, x, y, width, height) {
+    super(x, y, width, height);
+	  this.text = text;
+  }
+  
+  draw(ctx, visibleBounds) {
+    if (this.x > visibleBounds.right ||
+    this.x + this.width < visibleBounds.left ||
+    this.y > visibleBounds.bottom ||
+    this.y + this.height < visibleBounds.top) {
+      return;
+    }
+    // Fill text takes the lower left corner, so we need to add the height of the box.
+    ctx.fillStyle = 'black';
+    ctx.fillText(this.text, this.x, this.y + this.height);
+    const currentZoom = ctx.getTransform().a;
+    if (currentZoom <= 1.0) {
+      ctx.fillStyle = '#ddd';
+      ctx.fillRect(this.x - this.height, this.y, this.height, this.height);
+    } else if (currentZoom > 2.0) {
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 2.0 / currentZoom;
+      ctx.strokeRect(this.x, this.y, this.width, this.height);
+    }
+  }
+  handleEvent(eventType, canvasX, canvasY) {
+    if (eventType === "click") {
+      console.log(this.text);
+      return false;
+    } else {
+      return super.handleEvent(eventType, canvasX, canvasY);
+    }
+  }
+}
+
+class HLine {
+  constructor(y) {
+    this.y = y;
+  }
+ 
+  draw(ctx, visibleBounds) {
+    const currentZoom = ctx.getTransform().a;
+    ctx.fillStyle = '#bef';
+    const halfHeight = 0.5 / currentZoom;
+    // Calculate the canvas coordinates for the edges of the visible canvas.
+    ctx.fillRect(visibleBounds.left, this.y - halfHeight, 
+      visibleBounds.width, 2 * halfHeight);
+  }
+}
+
+
+class VLine {
+  constructor(x) {
+    this.x = x;
+  }
+  draw(ctx, visibleBounds) {
+    const currentZoom = ctx.getTransform().a;
+    ctx.fillStyle = '#fba';
+    const halfWidth = 1.0 / currentZoom;
+    // Calculate the canvas coordinates for the edges of the visible canvas.
+    ctx.fillRect(this.x - halfWidth, visibleBounds.top, 
+      2 * halfWidth, visibleBounds.height);
+  }
+}
+
+
+class MagicCanvas {
+  constructor(canvas, dataLayer) {
+    this.canvas = canvas;
+    this.dataLayer = dataLayer;
+    console.assert(this.dataLayer);
+    
+    this.ctx = this.canvas.getContext('2d');
+    this._resize();
+
+    window.addEventListener('resize', this._resize.bind(this));
+    this.rects = [];
+    this.rects.push(
+      new TextRect('Hello, World!', 100, 100, 300, 50));
+    
+    this.marks = [];
+    this.marks.push(new HLine(0));
+    this.marks.push(new VLine(0));
+    this.xOffset = 0;
+    this.yOffset = 0;
+    this.scale = 1;
+    this._addListener();
+    this._addRectListeners();
+    this.draw();
+  }
+  
+  _addRectListeners() {
+	  for (const eventName of ['mousedown', 'mousemove', 'mouseup', 'mouseover', 'click']) {
+		  this.canvas.addEventListener(eventName, this.handleMouseEvent.bind(this));
+	  }
+  }
+  handleMouseEvent(event) {
+		const rect = this.canvas.getBoundingClientRect();
+		const mouseX = event.clientX - rect.left;
+		const mouseY = event.clientY - rect.top;
+
+		const inverseMatrix = this.ctx.getTransform().inverse();
+		const canvasX = inverseMatrix.a * mouseX + inverseMatrix.c * mouseY + inverseMatrix.e;
+		const canvasY = inverseMatrix.b * mouseX + inverseMatrix.d * mouseY + inverseMatrix.f;
+
+    let needsLayout = false;
+		this.rects.forEach(rect => {
+		  if (canvasY >= rect.y && canvasY <= rect.y + rect.height) {
+        needsLayout |= rect.handleEvent(event.type, canvasX, canvasY);
+		  }
+		});
+    if (needsLayout) {
+      this._layout();
+    }
+	}
+  
+  _layout() {
+    // Sort rects by y-position, separating positive and negative rects
+    const positiveRects = this.rects.filter(rect => rect.y >= 0).sort((a, b) => a.y - b.y);
+    const negativeRects = this.rects.filter(rect => rect.y < 0).sort((a, b) => b.y - a.y);
+
+    // Position positive rects
+    let currentY = 0;
+    positiveRects.forEach(rect => {
+      rect.y = currentY;
+      currentY += rect.height;
+    });
+
+    // Position negative rects
+    let currentNegativeY = 0;
+    negativeRects.forEach(rect => {
+      currentNegativeY -= rect.height;
+      rect.y = currentNegativeY;
+    });
+  }
+
+	_resize() {
+		this.canvas.width = this.canvas.clientWidth;
+		this.canvas.height = this.canvas.clientHeight;
+		this.ctx = this.canvas.getContext('2d');
+		this.ctx.font = "50px serif";
+	}
+  
+  replaceText(text) {
+	  this.rects = [];
+	  // Split the text into lines
+	  const lines = text.split('\n');
+    // Calculate the font height
+    const fontHeight = this.ctx.measureText('M').width * 1.0; // Adjust the factor as needed
+
+    // Create a TextRect for each line
+    let y = 0;
+    lines.forEach((line, index) => {
+      this.rects.push(
+        new TextRect(line, 0, y, 
+          this.ctx.measureText(line).width, fontHeight));
+      y += fontHeight + 3;
+    });
+  }
+  
+  _zoomToPoint(clientX, clientY, zoom) {
+ 		const rect = this.canvas.getBoundingClientRect();
+		const mouseX = clientX - rect.left;
+		const mouseY = clientY - rect.top;   
+		
+		// Convert mouse coordinates to canvas coordinates
+		const inverseMatrix = this.ctx.getTransform().inverse();
+		const canvasX = inverseMatrix.a * mouseX + inverseMatrix.c * mouseY + inverseMatrix.e;
+		const canvasY = inverseMatrix.b * mouseX + inverseMatrix.d * mouseY + inverseMatrix.f;
+
+		// Move the context so the mouse is at the origin
+		this.ctx.translate(canvasX, canvasY);
+		this.ctx.scale(zoom, zoom);
+		this.ctx.translate(-canvasX, -canvasY);
+		
+		const newMatrix = this.ctx.getTransform();
+		
+		this.scale = newMatrix.a;
+		this.xOffset = newMatrix.e;
+		this.yOffset = newMatrix.f;
+  }
+  
+  _addListener() {
+	  let previousDistance = null;
+	  
+    this.canvas.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const delta = event.deltaY;
+      const scaleFactor = 1.2;
+      const zoom = (delta > 0) ? 1 / scaleFactor : scaleFactor;
+      
+      this._zoomToPoint(event.clientX, event.clientY, zoom);
+    });
+    
+    this.canvas.addEventListener('touchstart', (event) => {
+      // Handle the start of a touch event
+      const touch1 = event.touches[0];
+      const touch2 = event.touches[1];
+
+      if (touch1 && touch2) {
+      // Store the initial distance between the touch points
+      previousDistance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+      }
+    });
+
+    this.canvas.addEventListener('touchmove', (event) => {
+      const touch1 = event.touches[0];
+      const touch2 = event.touches[1];
+
+      if (touch1 && touch2) {
+        event.preventDefault(); // Prevent default scrolling behavior
+        const currentDistance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+        const zoom = currentDistance / previousDistance;
+        previousDistance = currentDistance;
+
+        // Calculate the midpoint between the two touch points
+        const midpointX = (touch1.clientX + touch2.clientX) / 2;
+        const midpointY = (touch1.clientY + touch2.clientY) / 2;
+
+        // Call your zoomToPoint function with the midpoint and zoom amount
+        this.zoomToPoint(midpointX, midpointY, zoom);
+      }
+    });
+  }
+
+  draw() {
+    // Reset transform to identity
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Clear the canvas with white background
+    this.ctx.fillStyle = 'white';
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // Set the transform for offset and zoom
+    this.ctx.translate(this.xOffset, this.yOffset);
+    this.ctx.scale(this.scale, this.scale);
+    // Draw each rect
+    
+    const visibleBounds = new VisibleBounds(this.ctx);
+    for (const rect of this.rects) {
+      rect.draw(this.ctx, visibleBounds);
+    }
+    for(const mark of this.marks) {
+      mark.draw(this.ctx, visibleBounds);
+    }
+	
+	requestAnimationFrame(this.draw.bind(this));
+  }
+}
+
+==== peaks.js ====
+const kIABufferSize = 4096;
+const kReduxRate = 8;
+
+class InfiniteArrayIterator {
+	constructor(arrayView) {
+		this.arrayView = arrayView;
+		this.currentIndex = arrayView.firstBufferIndex;
+		this.currentOffset = arrayView.firstBufferOffset;
+		this.returnCount = 0;
+	}
+	
+  next() {
+    if (this.returnCount >= this.count) {
+      return { done: true, value: undefined };
+    }
+
+    const buffer = this.arrayView.sourceArray.buffers[this.currentIndex];
+	// If the buffer is null, it means it is a buffer of zeros.
+    const value = !!buffer ? buffer[this.currentOffset] : 0;
+
+    this.currentOffset++;
+    if (this.currentOffset >= kIABufferSize) {
+      this.currentIndex++;
+      this.currentOffset = 0;
+    }
+
+    this.returnCount++;
+    return { done: false, value };
+  }
+}
+
+class InfiniteArrayView {
+	constructor(sourceArray, offset, count) {
+		this.sourceArray = sourceArray;
+		this.firstBufferIndex = Math.floor(offset / kIABufferSize);
+		this.firstBufferOffset = offset % kIABufferSize;
+	}
+	
+	*[Symbol.iterator]() {
+		return new InfiniteArrayIterator(this);
+	}
+}
+
+class InfiniteArray {
+  constructor() {
+    this.buffers = [];
+    this.maxValues = [];
+    this.index = 0;
+	this.bufferCount = 0;
+	this.length = 0;
+  }
+
+  append(value) {
+	  ++this.length;
+    const currentBuffer = this.buffers[this.buffers.length - 1];
+
+    if (!currentBuffer || this.index >= kIABufferSize) {
+		// Purge before we add a new buffer so we don't purge the new one.
+		if (this.bufferCount > 1024) {
+		  this.purgeOldBuffers();
+		}
+		this.buffers.push(new Float32Array(kIABufferSize));
+		++this.bufferCount;
+		this.maxValues.push(0);
+		this.index = 0;
+    }
+	const bufferIndex = this.buffers.length - 1;
+    this.buffers[bufferIndex][this.index] = value;
+    this.maxValues[bufferIndex] = Math.max(this.maxValues[bufferIndex], Math.abs(value));
+    this.index++;
+  }
+
+	purgeOldBuffers() {
+		const indices = Array.from({ length: this.buffers.length }, (_, i) => i);
+		indices.sort((a, b) => this.maxValues[b] - this.maxValues[a]); // Sort in descending order
+		// Purge 32 of the buffers.
+		for (let i = 0; i < 32; i++) {
+		  this.buffers[indices[i]] = null;
+		  this.maxValues[indices[i]] = 0;
+		}
+	}
+}
+
+class Viewable {
+  constructor (mins, maxs) {
+    this.mins = mins;
+    this.maxs = maxs;
+  }
+}
+
+// TODO: Have DataAccumulator extend Viewable.  SampleAndPeaks should extend it too.
+// Concrete implementation of getView should go in here.
+
+
+class DataAccumulator extends Viewable {
+  constructor() {
+    // Accumulated data at 1/kReduxRate resolution
+    this.minArray = new InfiniteArray();
+    this.maxArray = new InfiniteArray();
+    // If append is called with something that is not divisible by kReduxRate, the remainder
+    // is saved here for next time.
+    this.leftoverMin = new Float32Array(kReduxRate - 1);
+    this.leftoverMax = new Float32Array(kReduxRate - 1);
+    this.leftovers = 0;
+    this.currentMin = Infinity;
+    this.currentMax = -Infinity;
+    this.subAccumulator = null;
+    this.length = 0;
+  }
+  
+  _appendOne(x) {
+		this._appendMinMax(x, x);
+  }
+	
+	_appendMinMax(minX, maxX) {
+	    if (this.leftovers === kReduxRate - 1) {
+        if (!this.subAccumulator) {
+          this.subAccumulator = new DataAccumulator();
+        }
+        const newMinX = Math.min(this.currentMin, minX);
+        const newMaxX = Math.max(this.currentMax, maxX);
+        this.minArray.append(newMinX);
+        this.maxArray.append(newMaxX);
+        this.subAccumulator._appendMinMax(newMinX, newMaxX);
+        ++this.length;
+        this.leftovers = 0;
+        this.currentMin = Infinity;
+        this.currentMax = -Infinity;		  
+	    } else {
+        this.currentMin = Math.min(this.currentMin, minX);
+        this.currentMax = Math.max(this.currentMax, maxX);
+        this.leftoverMin[this.leftovers] = minX;
+        this.leftoverMax[this.leftovers] = maxX;
+        ++this.leftovers;
+	    }
+	}
+
+  appendArray(array) {
+	  for (const x of array) {
+		this._appendOne(x);
+	  }
+  }
+}
+
+class SamplesAndPeaks extends Viewable {
+	constructor() {
+		this.samples = new InfiniteArray();
+		this.peaks = new DataAccumulator();
+	}
+	
+	appendArray(array) {
+		this.peaks.appendArray(array);
+		for (const x of array) {
+			this.samples.append(x);
+		}
+	}
+  
+  getView(offset, count, minSamples) {
+    let returnSamples = count; 
+    let minSource = this.samples; 
+    let maxSource = this.samples; 
+    while (returnSamples / kReduxRate > minSamples && this.peaks) {
+      returnSamples = Math.ceil(returnSamples / kReduxRate); 
+      minSource = this.peaks.minArray; 
+      maxSource = this.peaks.maxArray;
+    }
+    const viewMin = new InfiniteArrayView(minSource, offset, returnSamples);
+    const viewMax = new InfiniteArrayView(maxSource, offset, returnSamples);
+    return new Viewable(viewMin, viewMax);
+  }
+}
+
+==== peer-connection.js ====
+class PeerConnection extends EventTarget {
+  constructor(channelId) {
+    this.channelId = channelId;
+    this.peerId = null; // Initialize peerId as null
+    this.peer = null;
+    this.conn = null;
+    this.otherId = undefined;
+    this.onDataReceived = null;
+    this.onConnectionError = null;
+    this.onConnectionClose = null;
+
+    this._initialize();
+  }
+
+  connect(otherPeerId) {
+    console.log('Connecting to peer...');
+    if (this.conn) {
+      this.conn.close();
+    }
+    this.conn = this.peer.connect(otherPeerId);
+    this._addConnHandlers();
+  }
+
+  call(otherPeerId, outgoingStream) {
+    const call = this.peer.call(otherPeerId, outgoingStream);
+    call.on('error', (err) => console.log(`Call error: ${err.message}`));
+    return call;
+  }
+
+  _addConnHandlers() {
+    this.conn.on('data', (data) => {
+      if (data.command === 'chat') {
+        // Handle chat data
+      } else if (data.command === 'set') {
+        // Handle set data
+      }
+    });
+
+    this.conn.on('close', () => console.log('Connection closed'));
+    this.conn.on('error', (err) => console.log('Connection error: ', err));
+  }
+  
+  
+  _initialize() {
+    // Ensure that peerId is set properly
+    this.peer = new Peer(this.channelId);
+    this.peer.on('open', this._onPeerOpen.bind(this));
+    this.peer.on('connection', this._onPeerConnection.bind(this));
+    this.peer.on('disconnected', this._onPeerDisconnected.bind(this));
+    this.peer.on('close', this._onPeerClose.bind(this));
+    this.peer.on('error', this._onPeerError.bind(this));
+    this.peer.on('call', this._onPeerCall.bind(this));
+  }
+
+  _onPeerOpen(id) {
+    console.log(`Peer open: ${id}`);
+    this.peerId = id; // Set peerId when the peer is opened
+    if (this.channelId === this.peerId) {
+      peerStatus.innerHTML = 'Server';
+    } else {
+      peerStatus.innerHTML = 'Client';
+      this.otherId = this.channelId;
+      this._join();
+    }
+  }
+
+  _onPeerConnection(c) {
+    console.log(`Peer connection. Other: ${c.peer}`);
+    this.otherId = c.peer;
+    peerStatus.innerHTML += " connected";
+    this.conn = c;
+    this._addConnHandlers();
+  }
+
+  _onPeerDisconnected() {
+    console.log('Peer disconnected');
+  }
+
+  _onPeerClose() {
+    console.log('Peer close');
+  }
+
+  _onPeerError(err) {
+    console.log(`Peer error: ${err.message}`);
+    if (err.message === `ID "${this.channelId}" is taken`) {
+      // Handle error logic (e.g., re-initialize or retry connection)
+      initialize(null);
+    }
+  }
+
+  _onPeerCall(call) {
+    console.log('Peer call (call received)');
+    const outgoingStream = audioCtx.createMediaStreamDestination();
+    inputSourceNode.connect(outgoingStream);
+    const analyser = audioCtx.createAnalyser();
+    inputSourceNode.connect(analyser);
+    const canvas = document.getElementById('dupeSignal');
+    const vu = new AudioVisualizer(canvas, analyser);
+    vu.start();
+
+    call.answer(outgoingStream.stream);
+    call.on('stream', (incomingStream) => this._handleIncomingStream(incomingStream));
+  }
+
+  _handleIncomingStream(incomingStream) {
+    console.log('Stream Received');
+    if (peerSourceNode) {
+      peerSourceNode.disconnect();
+    }
+
+    // Listen for stream events for better management
+    incomingStream.addEventListener('active', () => console.log('incomingStream active'));
+    incomingStream.addEventListener('addtrack', () => console.log('incomingStream addtrack'));
+    incomingStream.addEventListener('inactive', () => console.log('incomingStream inactive'));
+    incomingStream.addEventListener('removetrack', () => console.log('incomingStream removetrack'));
+
+    // Properly handle stream and create media source node
+    peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
+    this.dispatchEvent(new CustomEvent('peerStreamEstablished',
+    {
+      detail: {
+      peerSourceNode: peerSourceNode
+      }
+    }));
+  }
+
+  _join() {
+    console.log('join');
+    if (this.conn) {
+      this.conn.close();
+    }
+    this.conn = this.peer.connect(this.channelId);
+    this._addConnHandlers();
+  }
+
+}
+
+
+==== vu.js ====
+class AudioVisualizer {
+  constructor(canvas, analyzerNode) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.analyzerNode = analyzerNode;
+    this.bufferLength = analyzerNode.frequencyBinCount;
+    this.dataArray = new Float32Array(this.bufferLength);
+    this.animationId = null;
+    this.imageData = this.ctx.createImageData(canvas.width, canvas.height);
+    this.pixelData = this.imageData.data;
+  }
+
+  start() {
+    const draw = () => {
+      this.animationId = requestAnimationFrame(draw);
+      this.ctx.fillStyle = 'teal';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+      this.analyzerNode.getFloatTimeDomainData(this.dataArray);
+
+	  for (let i = 0; i < this.pixelData.length; ++i) {
+		  if (this.pixelData[i] > 0) {
+			  --this.pixelData[i];
+		  }
+	  }
+
+      // Center the visualization
+      const canvasWidthHalf = this.canvas.width / 2;
+      const canvasHeightHalf = this.canvas.height / 2;
+
+      // Iterate over the frequency data
+      for (let i = 0; i < this.bufferLength - 13; ++i) {
+        const x = this.dataArray[i] * canvasWidthHalf;
+        const y = this.dataArray[i+13] * canvasHeightHalf;
+		const xx = Math.round(x + canvasWidthHalf);
+		const yy = Math.round(y + canvasHeightHalf);
+		
+		if (xx < 0 || yy < 0 || xx >= this.canvas.width || yy >= this.canvas.height) { continue; }
+
+        // Calculate the pixel index
+        const pixelIndex = (yy * this.canvas.width + xx) * 4;
+
+        // Set pixel color
+        this.pixelData[pixelIndex + 0] = 255; // Red
+        this.pixelData[pixelIndex + 1] = 128; // Green
+        this.pixelData[pixelIndex + 2] = 64; // Blue
+        this.pixelData[pixelIndex + 3] = 255; // Alpha
+      }
+
+      this.ctx.putImageData(this.imageData, 0, 0);
+    };
+
+    draw();
+  }
+
+  stop() {
+    cancelAnimationFrame(this.animationId);
+  }
+}
+
+==== worklet-recorder.js ====
+class WorkletRecorder extends AudioWorkletProcessor {
+    first = true;
+
+    process(inputs) {
+      if (inputs.length == 0) { return; }
+      const channels = inputs[0];
+      if (channels.length == 0) { return; }
+      const samples = channels[0];
+      // Caller expects monophonic data, so only return the first channel.
+      this.port.postMessage({ 
+        timestamp: timestamp,
+        samples: samples, 
+      });
+      return true;
+    }
+}
+
+registerProcessor('worklet-recorder', WorkletRecorder);

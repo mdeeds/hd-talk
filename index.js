@@ -11,18 +11,73 @@ let sendMessageButton;
 let inputList;
 let outputList;
 let scanButton;
+let localPeaks = null;
+let dataLayer = null;
+
+let peerConnection = null;
+
+// Unique identifiers for the input and output devices
 let selectedInputDevice = null;
 let selectedOutputDevice = null;
+
 let audioCtx = null;
+// Audio nodes establishing the audio graph.
+
+// TODO: We need to figure out how to set up appropriate monitoring of the input.
+// inputSourceNode -> inputAnalyser
+// inputSourceNode -> tapeDeckInput
+// tapeDeckOutput -> localOutputNode
+// peerSourceNode -> peerAnalyser
+// peerSourceNode -> localOutputNode
+// localOutputNode -> audioCtx.destination
+// localOutputNode -> peerBroadcastNode
+// inputSourceNode -> peerBroadcastNode
 let inputAnalyser = null;
 let inputSourceNode = null;
 let peerAnalyser = null;
 let peerSourceNode = null;
-let localPeaks = null;
-let dataLayer = null;
+let localOutputNode = null;
 
 function getChannelId() {
   return `HD938541-${document.getElementById('connectionId').value}`;
+}
+
+async function changeAudioOutput(deviceId) {
+  if (!audioCtx || !localOutputNode) {
+    console.error("AudioContext or localOutputNode not initialized.");
+    return;
+  }
+
+  try {
+    // Disconnect the master output from the current destination
+    localOutputNode.disconnect();
+
+    // Get the MediaStreamTrack for the new output device
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    });
+
+    // Create a new MediaStreamDestinationNode for the selected device
+    const destination = audioCtx.createMediaStreamDestination();
+
+    // We need to cancel all of the *input* tracks.
+    for (const track of stream.getAudioTracks()) {
+      destination.stream.addTrack(track);
+      // Stop the temporary stream (important to release the device)
+      track.stop();
+    }
+    // Connect the master output to the new destination
+    localOutputNode.connect(destination);
+    stream.getTracks().forEach(t => t.stop());
+
+    console.log(`Output device changed to: ${deviceId}`);
+  } catch (error) {
+    console.error("Error changing audio output:", error);
+    // Optionally revert to the default destination or handle the error
+    localOutputNode.connect(audioCtx.destination);
+  }
+  selectedOutputDevice = deviceId;
 }
 
 function init() {
@@ -35,7 +90,8 @@ function init() {
 	inputList = document.getElementById('input-list');
 	outputList = document.getElementById('output-list');
 	scanButton = document.getElementById('scan');
-	initialize(getChannelId());
+	
+  peerConnection = new PeerConnection(getChannelId());
 	
 	 sendMessageButton.addEventListener('click', () => {
 	  const message = messageInput.value;
@@ -57,8 +113,7 @@ function init() {
 	});
 
 	outputList.addEventListener('change', (event) => {
-	  selectedOutputDevice = event.target.value;
-	  // Update audio output here, using the selected device ID
+    changeAudioOutput(event.target.value);
 	});
 
 	callButton.addEventListener('click', () => {
@@ -170,6 +225,8 @@ async function setInput(id) {
 function enumerateDevices() {
 	console.log('Scanning...');
 	audioCtx = new AudioContext();
+  localOutputNode = audioCtx.createGain();
+  localOutputNode.connect(audioCtx.destination);
   navigator.mediaDevices.getUserMedia({
 	  audio: {
 		  echoCancellation: false,
@@ -233,7 +290,8 @@ function enumerateDevices() {
         // Set the first output device as selected by default
         if (!selectedOutputDevice) {
           radio.checked = true;
-          selectedOutputDevice = device.deviceId;
+          // Set the output device asynchronously.
+          (async ()=>{ changeAudioOutput(device.deviceId); })();
         }
       });
     })

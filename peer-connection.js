@@ -1,4 +1,4 @@
-class PeerConnection {
+class PeerConnection extends EventTarget {
   constructor(channelId) {
     this.channelId = channelId;
     this.peerId = null; // Initialize peerId as null
@@ -12,6 +12,35 @@ class PeerConnection {
     this._initialize();
   }
 
+  connect(otherPeerId) {
+    console.log('Connecting to peer...');
+    if (this.conn) {
+      this.conn.close();
+    }
+    this.conn = this.peer.connect(otherPeerId);
+    this._addConnHandlers();
+  }
+
+  call(otherPeerId, outgoingStream) {
+    const call = this.peer.call(otherPeerId, outgoingStream);
+    call.on('error', (err) => console.log(`Call error: ${err.message}`));
+    return call;
+  }
+
+  _addConnHandlers() {
+    this.conn.on('data', (data) => {
+      if (data.command === 'chat') {
+        // Handle chat data
+      } else if (data.command === 'set') {
+        // Handle set data
+      }
+    });
+
+    this.conn.on('close', () => console.log('Connection closed'));
+    this.conn.on('error', (err) => console.log('Connection error: ', err));
+  }
+  
+  
   _initialize() {
     // Ensure that peerId is set properly
     this.peer = new Peer(this.channelId);
@@ -40,7 +69,7 @@ class PeerConnection {
     this.otherId = c.peer;
     peerStatus.innerHTML += " connected";
     this.conn = c;
-    this.addConnHandlers();
+    this._addConnHandlers();
   }
 
   _onPeerDisconnected() {
@@ -87,7 +116,12 @@ class PeerConnection {
 
     // Properly handle stream and create media source node
     peerSourceNode = audioCtx.createMediaStreamSource(incomingStream);
-    peerSourceNode.connect(peerAnalyser);
+    this.dispatchEvent(new CustomEvent('peerStreamEstablished',
+    {
+      detail: {
+      peerSourceNode: peerSourceNode
+      }
+    }));
   }
 
   _join() {
@@ -96,34 +130,7 @@ class PeerConnection {
       this.conn.close();
     }
     this.conn = this.peer.connect(this.channelId);
-    this.addConnHandlers();
+    this._addConnHandlers();
   }
 
-  connect(otherPeerId) {
-    console.log('Connecting to peer...');
-    if (this.conn) {
-      this.conn.close();
-    }
-    this.conn = this.peer.connect(otherPeerId);
-    this.addConnHandlers();
-  }
-
-  call(otherPeerId, outgoingStream) {
-    const call = this.peer.call(otherPeerId, outgoingStream);
-    call.on('error', (err) => console.log(`Call error: ${err.message}`));
-    return call;
-  }
-
-  addConnHandlers() {
-    this.conn.on('data', (data) => {
-      if (data.command === 'chat') {
-        // Handle chat data
-      } else if (data.command === 'set') {
-        // Handle set data
-      }
-    });
-
-    this.conn.on('close', () => console.log('Connection closed'));
-    this.conn.on('error', (err) => console.log('Connection error: ', err));
-  }
 }
